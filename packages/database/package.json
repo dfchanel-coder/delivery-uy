@@ -19,6 +19,7 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev",
+    "migration:build": "node scripts/build-migration.mjs",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "build": "pnpm run prisma:generate && tsc -b",
