@@ -1,0 +1,26 @@
+# Analyzer configuration for the shared Dart package.
+#
+# The rules are stricter than the default `flutter create` template because this
+# package holds code every application depends on (AGENTS.md sections 7, 95, 99).
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # A missing return type or an unused import must never ship.
+    missing_return: error
+    unused_import: error
+    unused_local_variable: error
+  exclude:
+    - build/**
+
+linter:
+  rules:
+    always_declare_return_types: true
+    avoid_print: true
+    avoid_slow_async_io: true
+    directives_ordering: true
+    prefer_final_locals: true
+    prefer_single_quotes: true
+    require_trailing_commas: true
+    sort_constructors_first: true
+    unawaited_futures: true

@@ -1,0 +1,15 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/config" },
+    { "path": "./packages/types" },
+    { "path": "./packages/auth" },
+    { "path": "./packages/maps" },
+    { "path": "./packages/payments" },
+    { "path": "./packages/billing" },
+    { "path": "./packages/notifications" },
+    { "path": "./packages/storage" },
+    { "path": "./packages/database" },
+    { "path": "./services/api" }
+  ]
+}

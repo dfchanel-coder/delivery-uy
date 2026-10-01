@@ -1,0 +1,14 @@
+{
+  "extends": "@deliveryuy/typescript-config/app.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/config" },
+    { "path": "../../packages/types" },
+    { "path": "../../packages/database" }
+  ]
+}

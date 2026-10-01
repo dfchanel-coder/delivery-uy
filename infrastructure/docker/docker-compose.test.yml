@@ -1,0 +1,41 @@
+# DeliveryUY - test infrastructure
+#
+# Integration and API tests run against a real PostgreSQL and Redis
+# (ADR-016). Each test file uses its own schema via TEST_SCHEMA.
+#
+# Usage:
+#   pnpm infra:test
+#   pnpm test
+#   pnpm infra:test:down
+
+name: deliveryuy-test
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: deliveryuy-postgres-test
+    environment:
+      POSTGRES_USER: delivery
+      POSTGRES_PASSWORD: delivery
+      POSTGRES_DB: deliveryuy_test
+    ports:
+      - '${TEST_POSTGRES_PORT:-5433}:5432'
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U delivery -d deliveryuy_test']
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    container_name: deliveryuy-redis-test
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports:
+      - '${TEST_REDIS_PORT:-6380}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 15

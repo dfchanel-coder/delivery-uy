@@ -1,0 +1,53 @@
+{
+  "name": "deliveryuy",
+  "version": "0.0.0",
+  "private": true,
+  "description": "DeliveryUY - multi-merchant local delivery marketplace",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@12.8.1",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "clean": "tsc -b tsconfig.json --clean",
+    "typecheck": "tsc -b tsconfig.json --force && tsc -p test/tsconfig.json",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm run build && vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "pnpm run build && vitest run --coverage",
+    "dev:api": "pnpm --filter @deliveryuy/api run dev",
+    "dev:admin": "pnpm --filter @deliveryuy/admin run dev",
+    "build:admin": "cross-env NEXT_TELEMETRY_DISABLED=1 NEXT_STANDALONE_OUTPUT=false pnpm --filter @deliveryuy/admin run build",
+    "db:generate": "pnpm --filter @deliveryuy/database run prisma:generate",
+    "db:migrate": "pnpm --filter @deliveryuy/database run prisma:migrate",
+    "db:studio": "pnpm --filter @deliveryuy/database run prisma:studio",
+    "infra:up": "docker compose -f infrastructure/docker/docker-compose.dev.yml up -d",
+    "infra:down": "docker compose -f infrastructure/docker/docker-compose.dev.yml down",
+    "infra:test": "docker compose -f infrastructure/docker/docker-compose.test.yml up -d",
+    "infra:test:down": "docker compose -f infrastructure/docker/docker-compose.test.yml down -v",
+    "verify": "pnpm run lint && pnpm run typecheck && pnpm run build:admin && pnpm run test && pnpm run format:check",
+    "flutter:check": "node scripts/flutter-check.mjs",
+    "verify:all": "pnpm run verify && pnpm run flutter:check"
+  },
+  "devDependencies": {
+    "@deliveryuy/eslint-config": "workspace:*",
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.2",
+    "@types/supertest": "^6.0.2",
+    "@vitest/coverage-v8": "^2.1.8",
+    "cross-env": "^10.1.0",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "supertest": "^7.0.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vite": "^5.4.21",
+    "vitest": "^2.1.8"
+  }
+}

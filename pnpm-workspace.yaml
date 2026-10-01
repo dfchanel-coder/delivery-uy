@@ -1,0 +1,26 @@
+packages:
+  - 'apps/*'
+  - 'services/*'
+  - 'packages/*'
+
+# Flutter/Dart shared packages (future packages/dart/*) are managed by the
+# Dart toolchain, not by pnpm, and are intentionally excluded here.
+
+# Dependency build scripts are denied by default (supply-chain control,
+# AGENTS.md sections 30 and 95). Only packages that genuinely require a native
+# build or code generation are allowed. This list is reviewed on every
+# dependency change; `false` entries are explicit denials, not omissions.
+allowBuilds:
+  # Installs the Prisma query engine binary.
+  '@prisma/client': true
+  '@prisma/engines': true
+  prisma: true
+  # esbuild ships the binary used by vitest.
+  esbuild: true
+  # Prints a donation banner only; no functional need.
+  '@nestjs/core': true
+  # Telemetry from an optional dependency. Denied deliberately.
+  '@scarf/scarf': false
+  # Optional peer of @nestjs/cli, used only by its SWC builder. DeliveryUY
+  # compiles with `tsc -b`, so the native binary is never needed. Denied.
+  '@swc/core': false

@@ -1,0 +1,26 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+package-lock.json
+pnpm-lock.yaml
+.next/
+next-env.d.ts
+# Flutter/Dart: platform folders are generated and formatted by the Flutter
+# templates, not by Prettier.
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+apps/*/ios/
+apps/*/android/
+ios/Pods/
+android/.gradle/
+
+# Markdown and YAML are handled outside Prettier, except CI workflows.
+*.md
+*.yml
+*.yaml
+!/.github/**/*.yml

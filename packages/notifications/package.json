@@ -1,0 +1,24 @@
+{
+  "name": "@deliveryuy/notifications",
+  "version": "0.0.0",
+  "private": true,
+  "description": "NotificationProvider abstraction. Notification failures must never corrupt order state (AGENTS.md section 23).",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "devDependencies": {
+    "@deliveryuy/typescript-config": "workspace:*"
+  }
+}

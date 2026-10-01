@@ -1,0 +1,58 @@
+# DeliveryUY - development infrastructure
+#
+# Usage:
+#   cp infrastructure/docker/.env.docker.example infrastructure/docker/.env.docker
+#   pnpm infra:up
+#
+# Development-only credentials. Production values never come from this file
+# (SECURITY.md, docs/DEPLOYMENT.md).
+
+name: deliveryuy-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: deliveryuy-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-delivery}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-delivery}
+      POSTGRES_DB: ${POSTGRES_DB:-deliveryuy}
+      # Deterministic collation for reproducible index behaviour.
+      POSTGRES_INITDB_ARGS: '--locale=C --encoding=UTF8'
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-delivery} -d ${POSTGRES_DB:-deliveryuy}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    command:
+      - postgres
+      - -c
+      - log_min_duration_statement=500
+      - -c
+      - log_lock_waits=on
+
+  redis:
+    image: redis:7-alpine
+    container_name: deliveryuy-redis
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:
+  redis-data:

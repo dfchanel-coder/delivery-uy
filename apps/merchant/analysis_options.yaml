@@ -1,0 +1,30 @@
+# Analyzer configuration for the merchant application.
+#
+# The rules are stricter than the default `flutter create` template because this
+# code runs on devices in production (AGENTS.md sections 42, 43, 99).
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # A missing return type or an unused import must never ship.
+    missing_return: error
+    unused_import: error
+    unused_local_variable: error
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+
+linter:
+  rules:
+    always_declare_return_types: true
+    avoid_print: true
+    directives_ordering: true
+    prefer_final_locals: true
+    prefer_single_quotes: true
+    require_trailing_commas: true
+    sort_constructors_first: true
+    unawaited_futures: true
+    # Frontend code may validate for user experience, but the backend is the
+    # authority (AGENTS.md section 42); never silence real errors instead.
+    only_throw_errors: true

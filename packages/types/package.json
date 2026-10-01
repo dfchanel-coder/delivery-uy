@@ -1,0 +1,24 @@
+{
+  "name": "@deliveryuy/types",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cross-surface contracts: API envelopes, error codes, realtime events (no business logic)",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "devDependencies": {
+    "@deliveryuy/typescript-config": "workspace:*"
+  }
+}

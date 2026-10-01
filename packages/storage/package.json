@@ -1,0 +1,24 @@
+{
+  "name": "@deliveryuy/storage",
+  "version": "0.0.0",
+  "private": true,
+  "description": "StorageProvider abstraction. Private documents must never be publicly readable (AGENTS.md section 24).",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "devDependencies": {
+    "@deliveryuy/typescript-config": "workspace:*"
+  }
+}
