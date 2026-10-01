@@ -26,6 +26,7 @@ accepted decision requires a new ADR that explicitly supersedes it
 | [016](ADR-016-testing-topology.md) | Testing Topology                      | ACCEPTED                        |
 | [017](ADR-017-test-transform.md) | Test Transform of NestJS Sources    | ACCEPTED                        |
 | [018](ADR-018-frontend-workspaces.md) | Frontend Workspaces and Shared Client Logic | ACCEPTED             |
+| [019](ADR-019-migration-verification.md) | Verifying Database Migrations without a Local Database | ACCEPTED |
 
 ## Naming
 

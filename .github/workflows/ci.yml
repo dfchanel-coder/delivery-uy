@@ -37,6 +37,14 @@ jobs:
       - name: Generate Prisma client
         run: pnpm db:generate
 
+      # `prisma validate` needs the variable to be present but opens no
+      # connection, so a throwaway value is enough on a machine without
+      # PostgreSQL.
+      - name: Validate Prisma schema
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+        run: pnpm run db:validate
+
       - name: Lint
         run: pnpm run lint
 
@@ -130,6 +138,27 @@ jobs:
         run: |
           docker compose -f infrastructure/docker/docker-compose.dev.yml config --quiet
           docker compose -f infrastructure/docker/docker-compose.test.yml config --quiet
+
+      # PHASE 02 exit criteria cannot be proven without a real PostgreSQL, and the
+      # development machine here has none. Applying the migration against the
+      # service container is what actually proves the DDL and the hand-written
+      # constraints are valid, that the seed runs and that the API reports ready.
+      - name: Apply migrations against real PostgreSQL
+        env:
+          DATABASE_URL: postgresql://delivery:delivery@localhost:5432/deliveryuy_test
+        run: |
+          pnpm run db:generate
+          pnpm --filter @deliveryuy/database exec prisma migrate deploy
+          pnpm --filter @deliveryuy/database exec prisma migrate status
+
+      - name: Seed reference data and verify idempotency
+        env:
+          DATABASE_URL: postgresql://delivery:delivery@localhost:5432/deliveryuy_test
+          APP_ENV: ci
+          NODE_ENV: ci
+        run: |
+          pnpm run db:seed
+          pnpm run db:seed
 
       - name: Readiness probe against real infrastructure
         env:

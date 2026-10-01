@@ -2,8 +2,8 @@
 
 LAST_UPDATED: 2026-10-01
 
-CURRENT_PHASE: PHASE 01
-CURRENT_MODULE: Monorepo - backend foundation + application skeletons
+CURRENT_PHASE: PHASE 02
+CURRENT_MODULE: Database - Prisma schema, migration 0001_init, reference seed
 
 ---
 
@@ -14,7 +14,7 @@ CURRENT_MODULE: Monorepo - backend foundation + application skeletons
 - Product, stack, roles and order state machine defined
 - ARCHITECTURE.md, DATABASE.md, SECURITY.md, LEGAL.md finalized
 - docs/ERD.md, docs/SCHEMA_PROPOSAL.md, docs/MODULE_BOUNDARIES.md
-- ADR-001 ... ADR-018 accepted (ADR-004 and ADR-015 carry
+- ADR-001 ... ADR-019 accepted (ADR-004 and ADR-015 carry
   `LEGAL_REVIEW_REQUIRED`)
 
 ### PHASE 01 - Monorepo (foundation slice)
@@ -87,6 +87,46 @@ Infrastructure and automation:
   formatting), `flutter` (Dart gate), `integration` (real PostgreSQL and Redis
   readiness probe plus compose validation)
 
+### PHASE 02 - Database (schema, migration, seed)
+
+Written and statically verified on 2026-10-01. **Not yet applied to a running
+database** - see BLOCKED and ADR-019.
+
+- `packages/database/prisma/schema.prisma`: 42 models, 26 enums, applied from
+  `docs/SCHEMA_PROPOSAL.md`. Every table and column is mapped explicitly to
+  snake_case, primary keys are uuid, timestamps are `timestamptz(3)`, money is
+  `numeric(14,2)` with an explicit currency, and coordinates carry range
+  checks
+- migration `0001_init`: 42 tables, 26 enum types, 90 indexes and 52 foreign
+  keys, plus the invariants Prisma cannot express in
+  `prisma/manual/0001_init_constraints.sql`: functional unique index on
+  `lower(email)` for non-deleted users, partial unique indexes (one default
+  variant per product, one `ACCEPTED` assignment per delivery, one default
+  address per user, one platform category per slug) and `CHECK` constraints on
+  coordinates, non-negative amounts, `quantity > 0`, opening-hour format,
+  commission rate, rating range and attempt counters
+- `order_timeline` uses `ON DELETE RESTRICT` towards `orders`: the timeline is
+  legal history
+- `packages/database/scripts/build-migration.mjs` regenerates the migration from
+  the schema plus the manual SQL, and refuses to write it if the schema does not
+  validate. Rebuilding twice produces byte-identical output
+- `packages/database/src/schema/`: a small schema parser and convention tests
+  that fail when the schema breaks a rule `prisma validate` does not check
+- `packages/database/src/soft-delete.ts`: `SOFT_DELETABLE_TABLES`, `notDeleted`,
+  `softDelete`, kept in sync with the schema by a test
+- `packages/database/prisma/seed.ts`: reference and configuration data only
+  (country, city, two zones, platform categories, global commission rule,
+  feature flags, operational settings), idempotent and refusing to run in
+  production. Accounts are deferred to PHASE 03 because password hashing does
+  not exist yet and a demo hash would be a fake implementation
+- CI `integration` job now runs `prisma migrate deploy`, `prisma migrate status`,
+  the seed twice (idempotency) and the readiness probe against real PostgreSQL
+  and Redis
+
+Locally verified: `prisma validate`, `prisma generate`, `migration:build`
+reproducibility, seed build plus its production and missing-URL guards,
+typecheck, lint and the vitest suite.
+
 ### Verified by running the code
 
 - `GET /api/v1/health/live` -> `200 {"data":{"status":"ok",...}}` with no
@@ -103,6 +143,10 @@ Infrastructure and automation:
 
 ## IN_PROGRESS
 
+- PHASE 02 - Database: schema, migration and seed are written; the
+  infrastructure-dependent half (applying `0001_init`, running the seed and the
+  database integration tests) is still unproven locally (see BLOCKED and
+  ADR-019)
 - PHASE 01 - Monorepo: only the Docker-backed verification of exit criteria 3
   and 5 is outstanding (see BLOCKED)
 
@@ -126,27 +170,32 @@ Infrastructure and automation:
   - PHASE 01 exit criterion 5 second half (readiness with infrastructure) is
     unverified locally - the degraded `503` path is verified by unit tests and
     by running the API;
-  - no `prisma migrate` has been executed yet, so PHASE 02 migrations cannot be
-    validated in this environment.
-  - Mitigation: the CI `integration` job runs the readiness probe against real
-    PostgreSQL and Redis service containers and validates both compose files, so
-    the criteria are proven where Docker exists. No migration may be called
-    verified until that job is green.
+  - PHASE 02: migration `0001_init` has never been applied, so it is written and
+    statically verified (Prisma schema engine, `prisma generate`, convention
+    tests) but **not** proven to apply, and the seed has never run against a real
+    database. No PHASE 02 exit criterion may be called verified until the CI
+    `integration` job is green.
+  - Mitigation: the CI `integration` job runs `prisma migrate deploy`,
+    `prisma migrate status`, the seed twice and the readiness probe against real
+    PostgreSQL and Redis service containers, and validates both compose files.
+    Until that job passes, PHASE 02 stays IN_PROGRESS.
 
 ---
 
 ## NEXT
 
-1. PHASE 02 - Database: implement `docs/SCHEMA_PROPOSAL.md` as the real Prisma
-   schema, with functional/partial unique indexes and CHECK constraints from raw
-   SQL, then the first migration
-2. Implement provider adapters behind the existing interfaces (map, payment,
+1. PHASE 02 - Database: get `prisma migrate deploy` and the seed proven against a
+   real PostgreSQL (CI `integration`), then close the phase
+2. PHASE 03 - Authentication: password hashing with Argon2id, access/refresh
+   tokens with rotation, session revocation, RBAC guards, and the development
+   user seed that `prisma/seed.ts` deliberately does not create
+3. Implement provider adapters behind the existing interfaces (map, payment,
    storage) instead of extending the "not configured" guards
-3. PHASE 03 - Authentication: password hashing with Argon2id, access/refresh
-   tokens with rotation, session revocation, RBAC guards
 4. Promote the admin HTTP client to `packages/` only when a second web client
    needs it (ADR-018)
-5. Seed data for development and demo environments (never in production)
+5. Database integration tests (`*.e2e.spec.ts` against a real database) become
+   possible only once a PostgreSQL is reachable; keep that as a CI-only layer
+   meanwhile
 
 ---
 

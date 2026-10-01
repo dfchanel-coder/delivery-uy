@@ -1,6 +1,7 @@
 # DeliveryUY Database Architecture
 
-Status: PHASE 00 finalized
+Status: PHASE 02 - schema and migration `0001_init` written, not yet applied to
+a live database (see "Applied Schema" below and ADR-019)
 
 Detailed model:
 
@@ -576,3 +577,59 @@ notifications and analytics never depend on in-process event delivery.
 
 Retention of financial, audit and personal data is
 `LEGAL_REVIEW_REQUIRED` (see `LEGAL.md`).
+
+---
+
+# Applied Schema
+
+Migration `0001_init` was created in PHASE 02. It is **written and statically
+verified, but not yet applied to a running database**: the development machine
+has no usable PostgreSQL (PROJECT_STATE.md, BLOCKED). Applying it is proven by
+the CI `integration` job (ADR-019).
+
+| File                                                  | Role                                                            |
+| ----------------------------------------------------- | --------------------------------------------------------------- |
+| `packages/database/prisma/schema.prisma`               | Source of truth: 42 models, 26 enums                            |
+| `packages/database/prisma/migrations/0001_init/`        | Generated DDL + hand-written constraints                         |
+| `packages/database/prisma/manual/0001_init_constraints.sql` | Constraints Prisma cannot express (partial/functional indexes, `CHECK`) |
+| `packages/database/scripts/build-migration.mjs`         | Rebuilds the migration from the two files above                  |
+| `packages/database/prisma/seed.ts`                     | Development reference data (no users; PHASE 03)                  |
+
+Commands:
+
+```bash
+pnpm run db:validate     # prisma validate (no database connection needed)
+pnpm run db:generate     # regenerate the Prisma client from the schema
+pnpm run db:migrate      # apply migrations to a development database
+pnpm run db:deploy       # apply migrations in a deployment (CI/production)
+pnpm run db:seed         # development and demo reference data
+pnpm --filter @deliveryuy/database run migration:build   # rebuild 0001_init
+```
+
+Rebuilding `0001_init` is only allowed while it has never been applied to a
+persistent database. Afterwards, changes go into a new migration (AGENTS.md
+section 96).
+
+What the migration adds beyond the generated DDL:
+
+- functional unique index on `lower(email)` for non-deleted users, so a deleted
+  account frees its address;
+- partial unique indexes: one default variant per product, one `ACCEPTED`
+  assignment per delivery, one default address per user, one platform category
+  per slug;
+- `CHECK` constraints on coordinates, non-negative stock and amounts,
+  `quantity > 0`, `day_of_week`, rollout percentage, commission rate, rating
+  range, `HH:mm` opening hours and attempt counters;
+- `ON DELETE RESTRICT` from `order_timeline` to `orders`: the timeline is legal
+  history and must survive the order.
+
+Seeding rules:
+
+- refuses to run when `APP_ENV` or `NODE_ENV` is `production`;
+- country, currency and timezone come from `DEFAULT_COUNTRY`,
+  `DEFAULT_CURRENCY` and `DEFAULT_TIMEZONE`; the city name comes from
+  `SEED_CITY_NAME`. Nothing is hardcoded to one city (AGENTS.md section 45);
+- zone coordinates and the 15% commission are development placeholders;
+- accounts are **not** seeded here. Password hashing arrives in PHASE 03 and the
+  user seed will use the production hashing implementation (AGENTS.md
+  section 5).

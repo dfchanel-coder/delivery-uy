@@ -15,6 +15,9 @@
     "dist",
     "prisma"
   ],
+  "prisma": {
+    "seed": "node dist/seed/seed.js"
+  },
   "scripts": {
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
@@ -22,6 +25,8 @@
     "migration:build": "node scripts/build-migration.mjs",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
+    "seed:build": "tsc -p tsconfig.seed.json",
+    "seed": "pnpm run seed:build && node dist/seed/seed.js",
     "build": "pnpm run prisma:generate && tsc -b",
     "clean": "tsc -b --clean"
   },

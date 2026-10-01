@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "DeliveryUY database seed (compiled, not transpiled at run time)",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./prisma",
+    "outDir": "./dist/seed",
+    "tsBuildInfoFile": "./dist/.seed.tsbuildinfo"
+  },
+  "include": ["prisma/seed.ts"]
+}

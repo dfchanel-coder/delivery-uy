@@ -14,5 +14,5 @@
     "lib": ["ES2023"],
     "types": ["node"]
   },
-  "include": ["./**/*.ts", "../vitest.config.ts"]
+  "include": ["./**/*.ts", "../vitest.config.ts", "../packages/database/prisma/seed.ts"]
 }

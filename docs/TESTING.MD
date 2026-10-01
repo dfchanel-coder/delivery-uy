@@ -69,6 +69,16 @@ Dart workspaces: `packages/dart/core` (shared contracts) and the three
 applications. Widget tests assert what the user sees, including that a screen
 never presents simulated data as if it were real.
 
+### Schema convention tests
+
+`packages/database/src/schema/schema-conventions.spec.ts` parses
+`prisma/schema.prisma` and asserts what `prisma validate` does not check: every
+table and column is snake_case, primary keys are uuid, timestamps are
+`timestamptz(3)`, money is `numeric(14,2)`, the soft-delete catalogue matches the
+schema, and no relation cascades towards money or audit history. They need no
+database, so a convention regression fails the ordinary suite instead of waiting
+for the next migration.
+
 ---
 
 ## How the suite runs
@@ -103,12 +113,13 @@ pnpm run verify:all    # both gates
 
 | Job          | What it proves                                                        |
 | ------------ | --------------------------------------------------------------------- |
-| `verify`     | lint, typecheck, builds, unit/API tests and formatting                |
+| `verify`     | Prisma schema validation, lint, typecheck, builds, unit/API tests and formatting |
 | `flutter`    | `flutter analyze` and `flutter test` in every Dart workspace           |
-| `integration` | real PostgreSQL/Redis readiness probe plus compose validation         |
+| `integration` | `prisma migrate deploy` + `migrate status`, the reference-data seed run twice, the readiness probe against real PostgreSQL/Redis, and compose validation |
 
-The `integration` job exists because the readiness endpoint can only be proven
-against real dependencies; local runs without Docker are not a substitute.
+The `integration` job exists because neither the readiness endpoint nor a
+migration can be proven without real dependencies; local runs without Docker are
+not a substitute (ADR-019).
 
 ## Critical rule
 

@@ -103,6 +103,8 @@ pnpm install                  # install workspace dependencies
 cp .env.example .env          # then replace every CHANGE_ME value
 pnpm infra:up                 # start PostgreSQL and Redis
 pnpm db:generate              # generate the Prisma client
+pnpm db:migrate               # apply the migrations
+pnpm db:seed                  # development reference data (no accounts)
 pnpm dev:api                  # http://localhost:3000
 pnpm dev:admin                # http://localhost:4000 (needs the API running)
 ```
@@ -133,8 +135,9 @@ pnpm run verify:all           # both gates
 Documentation:
 
 - `docs/TESTING.MD` - test layers and how to run them
-- `docs/decisions/` - accepted architecture decisions (ADR-001 ... ADR-018)
+- `docs/decisions/` - accepted architecture decisions (ADR-001 ... ADR-019)
 - `SECURITY.md`, `DATABASE.md`, `LEGAL.md` - non-negotiable constraints
+- `packages/database/README.md` - schema, migration and seed commands
 
 ---
 

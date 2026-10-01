@@ -128,7 +128,29 @@ Exit criteria:
 
 ## PHASE 02 - Database
 
-Implement initial Prisma schema.
+Status: IN_PROGRESS
+
+Implemented on 2026-10-01:
+
+- `packages/database/prisma/schema.prisma`: 42 models and 26 enums covering every
+  entity listed below, applied from `docs/SCHEMA_PROPOSAL.md` with explicit
+  snake_case mapping
+- migration `0001_init`: generated DDL plus the hand-written partial/functional
+  unique indexes and `CHECK` constraints of DATABASE.md, reproducible through
+  `packages/database/scripts/build-migration.mjs`
+- convention tests that parse the schema and assert uuid keys, `timestamptz`
+  timestamps, decimal money, no cascades towards money or audit history and the
+  soft-delete catalogue
+- `packages/database/prisma/seed.ts`: development reference data, refusing to run
+  in production; accounts are seeded in PHASE 03 with the real hashing
+
+Verified locally: `prisma validate`, `prisma generate`, `migration:build`
+(byte-identical on rebuild), typecheck, lint and the vitest suite.
+
+Not verified locally: applying the migration, running the seed and the database
+integration tests, because no PostgreSQL can run on this machine (see
+`PROJECT_STATE.md`, BLOCKED). The CI `integration` job performs them; no
+migration is considered applied until that job is green.
 
 Core entities:
 

@@ -119,6 +119,22 @@ export function createToolingConfig({ tsconfigRootDir }) {
         },
       },
     },
+    {
+      // The Prisma seed is a CLI script: it is compiled by tsconfig.seed.json and
+      // run with node, never imported by the library, so it is linted against the
+      // tooling project instead of the package build.
+      files: ['packages/database/prisma/**/*.ts'],
+      languageOptions: {
+        parserOptions: {
+          projectService: false,
+          project: ['./test/tsconfig.json'],
+          tsconfigRootDir,
+        },
+      },
+      rules: {
+        'no-console': 'off',
+      },
+    },
   ];
 }
 

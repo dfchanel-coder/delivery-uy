@@ -1,6 +1,29 @@
 # DeliveryUY Prisma Model Proposal
 
-Status: PHASE 00 deliverable (proposal - **not yet applied**)
+Status: **APPLIED in PHASE 02** as `packages/database/prisma/schema.prisma` +
+migration `0001_init` (see ADR-019 for how it is verified). This document stays
+as the design rationale and the record of what changed while applying it.
+
+Changes applied while implementing this proposal:
+
+1. **Core scope only.** The extension groups in section 1 (cart, ledger and
+   settlements, promotions, support and disputes, ratings, billing) are still
+   future migrations, so `Commission`/`Settlement`/`DriverEarning` follow the
+   ledger in PHASE 15 while `CommissionRule` (configuration) is in Core. This
+   resolves the older `ROADMAP.MD` list, which named the ledger tables as PHASE 02
+   entities; the split in section 1 is the more precise statement and wins.
+2. **Explicit mapping.** Every table and column is mapped with `@@map`/`@map`
+   (section 2 asked for it; the sample models did not show it). A Prisma rename
+   therefore can never rename a database column silently.
+3. **`countries` table.** `Country` had no `@@map`; it is now `countries` for
+   consistency with the plural convention.
+4. **`order_timeline` restricts deletion.** Its relation to `orders` is
+   `ON DELETE RESTRICT`, because the timeline is legal history.
+5. **Extra constraints.** Beyond section 4: non-negative money on orders,
+   payments and order items; `refunded_amount <= paid_amount`; rating range;
+   commission rate range; `HH:mm` opening hours; attempt counters. The ledger
+   balance trigger of section 4 is intentionally **not** created here: it guards
+   tables that do not exist yet and arrives with the PHASE 15 migration.
 
 Derived from `docs/ERD.md`. Governing decisions: `ADR-008` (money),
 `ADR-009` (ids, timestamps, soft delete), `ADR-010` (delivery code),
