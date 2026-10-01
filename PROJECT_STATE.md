@@ -110,18 +110,28 @@ Infrastructure and automation:
 
 ## BLOCKED
 
-- Docker is not installed on the current development machine (no Docker, no
-  WSL, no elevation), so PostgreSQL and Redis cannot be started locally.
+- PostgreSQL cannot run on the current development machine, so the
+  infrastructure-dependent exit criteria cannot be verified here. What was tried
+  on 2026-10-01:
+  - Docker, Docker Desktop and WSL are not installed, and the shell has no
+    elevation, so `docker compose` cannot be used;
+  - a portable PostgreSQL 16.10 (EnterpriseDB binaries, `initdb` + `pg_ctl`,
+    no elevation, no system change) installed and the postmaster started, but
+    every backend process dies with `0xC0000142` (`STATUS_DLL_INIT_FAILED`) as
+    soon as a client connects, so no session can be served. The extracted
+    binaries and data directory were removed afterwards.
   Consequences:
   - PHASE 01 exit criterion 3 (compose brings up both services with
     healthchecks) is unverified locally;
   - PHASE 01 exit criterion 5 second half (readiness with infrastructure) is
-    unverified locally - the degraded `503` path is verified instead;
+    unverified locally - the degraded `503` path is verified by unit tests and
+    by running the API;
   - no `prisma migrate` has been executed yet, so PHASE 02 migrations cannot be
     validated in this environment.
   - Mitigation: the CI `integration` job runs the readiness probe against real
-    service containers, so the criteria are proven where Docker exists. No
-    migration may be called verified until that job is green.
+    PostgreSQL and Redis service containers and validates both compose files, so
+    the criteria are proven where Docker exists. No migration may be called
+    verified until that job is green.
 
 ---
 
