@@ -33,6 +33,8 @@ Toolchain:
   (`pnpm-workspace.yaml`); `@scarf/scarf` and `@swc/core` are explicitly denied
 - `scripts/flutter-check.mjs` runs the Dart gate; `pnpm run verify:all` chains
   both gates (ADR-018)
+- Git repository initialised with `.gitattributes` (LF normalisation, CRLF only
+  for `*.bat`/`*.cmd`) and one bootstrap commit; nothing has been pushed
 
 Shared packages:
 
