@@ -40,7 +40,7 @@ Deliverables:
 - docs/ERD.md (initial ERD with constraints, indexes, retention)
 - docs/SCHEMA_PROPOSAL.md (Prisma model proposal + raw SQL requirements)
 - docs/MODULE_BOUNDARIES.md (layering, ownership, import rules)
-- docs/decisions/ADR-001 ... ADR-016
+- docs/decisions/ADR-001 ... ADR-016, extended later by ADR-017 ... ADR-020
 
 Exit criteria (all met):
 
@@ -142,7 +142,8 @@ Implemented on 2026-10-01:
   timestamps, decimal money, no cascades towards money or audit history and the
   soft-delete catalogue
 - `packages/database/prisma/seed.ts`: development reference data, refusing to run
-  in production; accounts are seeded in PHASE 03 with the real hashing
+  in production, plus the development accounts added in PHASE 03 (real Argon2id
+  hashes, credentials from `SEED_*`)
 
 Verified locally: `prisma validate`, `prisma generate`, `migration:build`
 (byte-identical on rebuild), typecheck, lint and the vitest suite.
@@ -190,6 +191,8 @@ Add:
 
 ## PHASE 03 - Authentication
 
+Status: IN_PROGRESS
+
 Implement:
 
 - register
@@ -202,6 +205,49 @@ Implement:
 - account status
 - sessions
 - RBAC
+
+Implemented on 2026-10-02:
+
+- `packages/auth`: Argon2id hashing (`hashPassword`, `verifyPassword`,
+  `verifyPasswordOrDummy`, `passwordNeedsRehash`), the HS256 access token
+  issuer/verifier on `jose`, and the principal/RBAC model - 56 unit tests.
+  Dependencies and their rejection criteria: `ADR-020`
+- `services/api/src/modules/auth`: ports, tokens, service, controller and DTOs,
+  with four Prisma adapters (`UserRepository`, `SessionRepository`,
+  `PasswordResetTokenRepository`, `RiskEventRepository`) and an
+  `UnavailablePasswordRecoveryNotifier` that refuses to pretend an email was sent
+  until a notification provider exists
+- refresh tokens are opaque and hashed; rotation detects replay through a
+  conditional update and revokes the token family
+- `JwtAuthGuard` globally, `@Public()` to opt out, `@Roles()` and
+  `@Permissions()` for authorization, `@RateLimit()` per route
+- rate limiting port with a Redis (Lua, atomic) backend and an in-process
+  backend, failing closed when the store is unreachable
+- `packages/config`: `REQUIRE_EMAIL_VERIFICATION`, `REGISTER_DEFAULT_ROLE`,
+  `PASSWORD_RESET_TTL_HOURS`, `TRUST_PROXY_HOPS`, `RATE_LIMIT_BACKEND`, plus a
+  `superRefine` rule that rejects verification-required without a notification
+  provider
+- `prisma/seed.ts` now creates the development accounts with real Argon2id
+  hashes, credentials supplied by `SEED_*` variables, and the driver in
+  `PENDING_REVIEW`
+- 5 infrastructure specs (`*.integration.spec.ts`) for the four Prisma adapters
+  and the Redis limiter, in a separate suite with a report assertion that fails
+  when a test skipped (`docs/TESTING.MD`)
+
+Verified locally: `pnpm run lint`, `pnpm run build`, `pnpm run typecheck`,
+497 vitest tests across 17 files, `pnpm run flutter:check`.
+
+Remaining before this phase can close:
+
+1. the CI `integration` job green, which is the only place the four Prisma
+   adapters, the Redis limiter, `prisma migrate deploy` and the seed run against
+   real infrastructure (see `PROJECT_STATE.md`, BLOCKED);
+2. a notification provider behind `PasswordRecoveryNotifier`. Until then,
+   `POST /auth/password/forgot` accepts and records the token but no message
+   leaves the process, which is why the adapter is named `Unavailable...` and
+   says so instead of returning a fake success;
+3. `README` / operator documentation of the bootstrap credentials the seed
+   creates.
 
 ---
 

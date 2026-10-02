@@ -27,6 +27,7 @@ accepted decision requires a new ADR that explicitly supersedes it
 | [017](ADR-017-test-transform.md) | Test Transform of NestJS Sources    | ACCEPTED                        |
 | [018](ADR-018-frontend-workspaces.md) | Frontend Workspaces and Shared Client Logic | ACCEPTED             |
 | [019](ADR-019-migration-verification.md) | Verifying Database Migrations without a Local Database | ACCEPTED |
+| [020](ADR-020-cryptography-libraries.md) | Cryptography Libraries for Password Hashing and Access Tokens | ACCEPTED |
 
 ## Naming
 

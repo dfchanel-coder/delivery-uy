@@ -104,10 +104,16 @@ cp .env.example .env          # then replace every CHANGE_ME value
 pnpm infra:up                 # start PostgreSQL and Redis
 pnpm db:generate              # generate the Prisma client
 pnpm db:migrate               # apply the migrations
-pnpm db:seed                  # development reference data (no accounts)
+pnpm db:seed                  # reference data + one account per role family
 pnpm dev:api                  # http://localhost:3000
 pnpm dev:admin                # http://localhost:4000 (needs the API running)
 ```
+
+`pnpm db:seed` requires the eight `SEED_*` credentials from `.env`: it creates
+one account per role family (`ADMIN`, `MERCHANT`, `DRIVER`, `CUSTOMER`) so a
+login can be exercised, and it refuses to invent a password. Change
+`SEED_*_PASSWORD` in `.env` before seeding anywhere you care about. The script
+refuses to run when `APP_ENV` or `NODE_ENV` is `production`.
 
 Mobile applications:
 

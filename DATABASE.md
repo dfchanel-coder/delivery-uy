@@ -602,7 +602,7 @@ pnpm run db:validate     # prisma validate (no database connection needed)
 pnpm run db:generate     # regenerate the Prisma client from the schema
 pnpm run db:migrate      # apply migrations to a development database
 pnpm run db:deploy       # apply migrations in a deployment (CI/production)
-pnpm run db:seed         # development and demo reference data
+pnpm run db:seed         # reference data + development accounts (needs SEED_*)
 pnpm --filter @deliveryuy/database run migration:build   # rebuild 0001_init
 ```
 
@@ -630,6 +630,25 @@ Seeding rules:
   `DEFAULT_CURRENCY` and `DEFAULT_TIMEZONE`; the city name comes from
   `SEED_CITY_NAME`. Nothing is hardcoded to one city (AGENTS.md section 45);
 - zone coordinates and the 15% commission are development placeholders;
-- accounts are **not** seeded here. Password hashing arrives in PHASE 03 and the
-  user seed will use the production hashing implementation (AGENTS.md
-  section 5).
+- every write is idempotent: a second run neither duplicates a row nor rewrites an
+  existing password hash, which would silently invalidate the credentials in use.
+
+### Development accounts
+
+One account per role family is created so a login can be exercised end to end:
+`ADMIN`, `MERCHANT`, `DRIVER` and `CUSTOMER`. The driver account also gets its
+`Driver` profile row, which requires the seeded city.
+
+- `SEED_<ROLE>_EMAIL` and `SEED_<ROLE>_PASSWORD` are **required**. There is no
+  committed default: an account whose password lives in this repository is one an
+  attacker can guess, and the seed would create it on any machine that forgot the
+  variable. `.env.example` documents the eight variables.
+- passwords are hashed with the same Argon2id implementation the API uses
+  (`@deliveryuy/auth`), so a seeded account is a working login rather than a
+  fixture that only looks plausible (AGENTS.md section 5).
+- accounts are created `ACTIVE` with `emailVerifiedAt` set, so they can sign in
+  even when `REQUIRE_EMAIL_VERIFICATION=true`; the driver stays
+  `PENDING_REVIEW` because driver approval is PHASE 10.
+- `packages/database/scripts/assert-seeded-users.mjs` verifies what the seed
+  claims: exactly one account per family, an Argon2id digest in every
+  `password_hash`, the expected role, and an unchanged digest across two runs.
