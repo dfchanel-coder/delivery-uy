@@ -4,4 +4,14 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- Cleartext HTTP is enabled for debug builds only, so the application can
+         reach a development API on the host machine through the emulator alias
+         http://10.0.2.2:3000. Android 9+ blocks cleartext by default, and the
+         release manifest deliberately keeps that block: a production build must
+         not be able to talk to a plain HTTP origin (AGENTS.md section 30).
+         The reverse proxy is expected to terminate TLS in front of the API.
+    -->
+    <application
+        android:usesCleartextTraffic="true"/>
 </manifest>
