@@ -10,3 +10,4 @@ export 'src/api_client.dart';
 export 'src/api_envelope.dart';
 export 'src/app_config.dart';
 export 'src/auth.dart';
+export 'src/token_store.dart';

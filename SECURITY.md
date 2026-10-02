@@ -354,6 +354,44 @@ no value other than `CUSTOMER`.
 
 ---
 
+# Client Credential Storage
+
+Use:
+
+- platform keystore or keychain for any persisted credential
+- never `SharedPreferences`, never a plain file
+
+Rules:
+
+- only the refresh token is persisted; the access token is short lived and is
+  obtained again on launch
+- a stored credential is namespaced by the API origin that issued it
+- sign-out removes the stored value before it attempts revocation
+
+## Concrete design (PHASE 03, `ADR-021`)
+
+- `TokenStore` is a port in `packages/dart/core` (`read`, `write`, `clear`); the
+  plugin-backed implementation lives in the application, so the shared package
+  stays free of platform dependencies and each build supplies its own.
+- `SecureTokenStore` in `apps/customer` wraps `flutter_secure_storage`. On
+  Android 11+ the value is AES-GCM under a key wrapped by the Keystore; on iOS
+  it is a keychain item with `first_unlock_this_device`, which keeps it out of
+  backup migrations. The store is discarded when the application is uninstalled.
+- `StoredSession` carries `apiBaseUrl`, and the key is derived from it. Secure
+  storage is scoped to the application install, not to the deployment, so a
+  debug build and a release build on one device would otherwise share a keyspace
+  and a debug build could replay a token issued by production.
+- `resetOnError` stays at the plugin default. An entry whose wrapping key was
+  lost cannot be decrypted, so dropping it and asking the user to sign in again
+  is the only honest outcome; the alternative is an application that cannot
+  start.
+- The port exists because `SecureTokenStore` itself cannot be unit tested: it is
+  a platform channel. The logic around it is tested against `InMemoryTokenStore`
+  (7 tests) and the plugin is proven by running it on a device, recorded in
+  `PROJECT_STATE.md`.
+
+---
+
 # Log Redaction
 
 A global redaction allowlist replaces `password`, `passwordHash`, `token`,
@@ -412,13 +450,15 @@ Written and passing locally:
   impossible rather than merely unlikely;
 - RBAC (`packages/auth`, 7 tests) - the permission matrix.
 
-Still unverified, because it needs real infrastructure (see `PROJECT_STATE.md`
-BLOCKED):
+Verified against real infrastructure (PostgreSQL 16 and Redis 7 outside the
+repository; see `PROJECT_STATE.md` BLOCKED):
 
-- the four Prisma adapters of the auth module, against real PostgreSQL
-  (`*.integration.spec.ts`);
+- the four Prisma adapters of the auth module (`*.integration.spec.ts`);
 - the Redis rate limiter, including failing closed when Redis is unreachable
   (`redis-rate-limiter.integration.spec.ts`).
+
+Still unverified: the same suite running inside the CI `integration` job, which
+is the only place the compose files themselves are exercised.
 
 Not yet applicable, because the feature does not exist yet: IDOR on orders,
 delivery code brute force, WebSocket room authorization, webhook signatures and

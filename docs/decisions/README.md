@@ -28,6 +28,7 @@ accepted decision requires a new ADR that explicitly supersedes it
 | [018](ADR-018-frontend-workspaces.md) | Frontend Workspaces and Shared Client Logic | ACCEPTED             |
 | [019](ADR-019-migration-verification.md) | Verifying Database Migrations without a Local Database | ACCEPTED |
 | [020](ADR-020-cryptography-libraries.md) | Cryptography Libraries for Password Hashing and Access Tokens | ACCEPTED |
+| [021](ADR-021-mobile-credential-persistence.md) | Credential Persistence in the Mobile Applications | ACCEPTED |
 
 ## Naming
 

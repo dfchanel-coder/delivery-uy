@@ -31,20 +31,25 @@ enum AuthFailureKind {
 
 /// Owns the session state of the customer application.
 ///
-/// The controller holds credentials in memory and nothing else. No storage
-/// backend is wired yet, so nothing is written to disk: a token that survives a
-/// restart without an encrypted store is a token an attacker can lift from a
-/// backup, and pretending otherwise would be worse than losing the session on
-/// app restart (SECURITY.md, AGENTS.md section 30).
+/// The controller holds the open session in memory and persists only the refresh
+/// token through [tokenStore]. The access token is never written anywhere: it is
+/// short lived and is obtained again from the refresh token on startup, so
+/// storing it would widen the window in which a lifted file yields a usable
+/// credential without gaining anything.
 ///
 /// Every permission decision stays on the API. This class never decides what an
 /// account may do; it only reflects what the API reported (AGENTS.md section 42).
 class AuthController extends ChangeNotifier {
-  /// Creates a controller over [authApi].
+  /// Creates a controller over [authApi], persisting through [tokenStore].
   ///
   /// [config] is carried along so the interface can show which deployment it is
-  /// talking to, instead of hiding a misconfigured build behind an empty screen.
-  AuthController({required this.authApi, required this.config});
+  /// talking to, instead of hiding a misconfigured build behind an empty screen,
+  /// and so a stored session is only used against the deployment that issued it.
+  AuthController({
+    required this.authApi,
+    required this.config,
+    required this.tokenStore,
+  });
 
   /// Validated deployment this session belongs to.
   final AppConfig config;
@@ -52,9 +57,13 @@ class AuthController extends ChangeNotifier {
   /// Authentication endpoints the controller drives.
   final AuthApi authApi;
 
+  /// Where the refresh token survives a restart.
+  final TokenStore tokenStore;
+
   AuthStatus _status = AuthStatus.signedOut;
   AuthSession? _session;
   String? _pendingVerificationEmail;
+  bool _restoring = false;
   AuthFailureKind? _failureKind;
   String? _failureCode;
   String? _failureMessage;
@@ -68,6 +77,10 @@ class AuthController extends ChangeNotifier {
   AuthSession? get session => _session;
 
   /// Access token of the open session, or null when signed out.
+  ///
+  /// Use [ensureFreshSession] before a protected request instead of reading this,
+  /// so an access token that expired while the application was open is renewed
+  /// before it is spent.
   String? get accessToken => _session?.tokens.accessToken;
 
   /// Address of the account waiting for verification, when that is the state.
@@ -114,13 +127,11 @@ class AuthController extends ChangeNotifier {
         password: password,
       );
 
-      _session = session;
-      _status = AuthStatus.signedIn;
+      await _openSession(session);
     } on ApiClientException catch (error) {
       _recordFrom(error);
+      notifyListeners();
     }
-
-    notifyListeners();
   }
 
   /// Creates an account.
@@ -151,23 +162,95 @@ class AuthController extends ChangeNotifier {
       if (session == null) {
         _pendingVerificationEmail = registration.user.email;
         _status = AuthStatus.awaitingVerification;
-      } else {
-        _session = session;
-        _status = AuthStatus.signedIn;
+        notifyListeners();
+        return;
       }
+
+      await _openSession(session);
     } on ApiClientException catch (error) {
       _recordFrom(error);
+      notifyListeners();
+    }
+  }
+
+  /// Rebuilds the session from a stored refresh token.
+  ///
+  /// Called once at launch. Failures are deliberately silent: nobody asked for
+  /// anything, and an unreachable server at startup must not greet the user with
+  /// an error banner over a sign-in form they have not touched yet. A refresh
+  /// token the API rejects is removed, because a revoked or already-rotated token
+  /// will never work again and keeping it would fail the same way on every
+  /// launch.
+  Future<void> restore() async {
+    if (_restoring || _session != null) {
+      return;
     }
 
-    notifyListeners();
+    _restoring = true;
+
+    try {
+      final StoredSession? stored = await tokenStore.read(config.apiBaseUrl);
+
+      if (stored == null) {
+        return;
+      }
+
+      _status = AuthStatus.submitting;
+      notifyListeners();
+
+      final AuthSession renewed = await authApi.refresh(stored.refreshToken);
+
+      await _openSession(renewed);
+    } on ApiFailureException {
+      // The API answered and refused the token, so it is gone for good: revoked,
+      // already rotated, or reused. Keeping it would fail the same way on every
+      // launch and hide the reason the user keeps landing on the sign-in form.
+      await _forgetStoredSession();
+    } on ApiClientException {
+      // The API was never reached, so it rejected nothing. The token stays and the
+      // next launch tries again.
+    } on Object {
+      // A storage backend that cannot be read must not stop the application from
+      // starting: a signed-out application is strictly better than a crash.
+    } finally {
+      _restoring = false;
+
+      if (_session == null && _status == AuthStatus.submitting) {
+        // Left behind by the in-flight transition above. Anything else here would
+        // be a bug rather than a state to repair.
+        _status = AuthStatus.signedOut;
+      }
+    }
+  }
+
+  /// Renews the session when the access token is expired or about to expire.
+  ///
+  /// Returns whether a usable session is open afterwards. A protected request
+  /// should be preceded by this call rather than reading [accessToken], because a
+  /// 15-minute token will otherwise stop working in the middle of an order.
+  Future<bool> ensureFreshSession({
+    Duration leeway = const Duration(seconds: 60),
+  }) async {
+    final AuthSession? current = _session;
+
+    if (current == null) {
+      return false;
+    }
+
+    if (!_isExpiring(current.tokens, leeway)) {
+      return true;
+    }
+
+    return _renew();
   }
 
   /// Ends the session.
   ///
-  /// The local session is dropped before the revocation call is attempted, so a
-  /// network failure cannot leave the interface showing a session that the user
-  /// asked to end. A failed revocation only leaves the old token alive until it
-  /// expires, which the API already bounds.
+  /// The stored token is removed before the revocation call is attempted, so a
+  /// network failure cannot leave a usable credential on disk, and the local
+  /// session is dropped before the call so the interface never shows a session
+  /// the user asked to end. A failed revocation only leaves the old token alive
+  /// until it expires, which the API already bounds.
   Future<void> signOut() async {
     final AuthSession? current = _session;
 
@@ -176,6 +259,8 @@ class AuthController extends ChangeNotifier {
     _status = AuthStatus.signedOut;
     _clearFailure();
     notifyListeners();
+
+    await _forgetStoredSession();
 
     if (current == null) {
       return;
@@ -193,21 +278,33 @@ class AuthController extends ChangeNotifier {
   ///
   /// Used by the session page to prove the credential is still accepted, which
   /// is also how an expired or revoked token becomes visible.
+  ///
+  /// A `401 UNAUTHENTICATED` is retried once after renewing the session, because
+  /// the overwhelmingly common cause is an access token that expired while the
+  /// application was open. The retry is not a loop: a second rejection is
+  /// recorded as the failure it is.
   Future<AuthUser?> loadAccount() async {
-    final AuthSession? current = _session;
-
-    if (current == null) {
+    if (_session == null) {
       return null;
     }
 
-    try {
-      return await authApi.me(current.tokens.accessToken);
-    } on ApiClientException catch (error) {
-      _recordFrom(error);
-      notifyListeners();
+    final _AccountAttempt first = await _attemptAccount();
 
+    if (first.account != null) {
+      return first.account;
+    }
+
+    // Only an expired credential is worth a renewal. Any other rejection is the
+    // answer itself, and retrying it would send a request that cannot succeed.
+    if (!first.tokenRejected) {
       return null;
     }
+
+    if (!await _renew()) {
+      return null;
+    }
+
+    return (await _attemptAccount()).account;
   }
 
   /// Returns to the sign-in form from the "account created" screen.
@@ -229,6 +326,116 @@ class AuthController extends ChangeNotifier {
 
     _clearFailure();
     notifyListeners();
+  }
+
+  /// Stores the session and moves to the signed-in state.
+  Future<void> _openSession(AuthSession session) async {
+    _session = session;
+    _status = AuthStatus.signedIn;
+    _clearFailure();
+
+    try {
+      await tokenStore.write(
+        StoredSession(
+          refreshToken: session.tokens.refreshToken,
+          apiBaseUrl: config.apiBaseUrl,
+        ),
+      );
+    } on Object {
+      // The session is valid; only persistence failed. Losing it on restart is
+      // an inconvenience, and refusing to sign the user in would be worse.
+    }
+
+    notifyListeners();
+  }
+
+  /// Exchanges the open refresh token for a new pair.
+  ///
+  /// Rotation means the token sent here is consumed by the call, so this must not
+  /// run twice for one session (SECURITY.md). Callers therefore go through
+  /// [ensureFreshSession] or [loadAccount], both of which check the state first.
+  Future<bool> _renew() async {
+    final AuthSession? current = _session;
+
+    if (current == null || _status == AuthStatus.submitting) {
+      return false;
+    }
+
+    _status = AuthStatus.submitting;
+    notifyListeners();
+
+    try {
+      final AuthSession renewed = await authApi.refresh(current.tokens.refreshToken);
+
+      await _openSession(renewed);
+      return true;
+    } on ApiClientException catch (error) {
+      // A rejected refresh means the token is gone: revoked, already rotated by
+      // another request, or reused. Nothing can be recovered from it.
+      await _forgetStoredSession();
+      _recordFrom(error);
+      notifyListeners();
+
+      return false;
+    }
+  }
+
+  /// One `GET /auth/me` attempt and what it produced.
+  ///
+  /// The three outcomes are kept apart instead of collapsing into a nullable
+  /// account, because "the API rejected the credential" and "the API rejected this
+  /// request" call for different next steps: only the first one can be fixed by
+  /// renewing the session.
+  Future<_AccountAttempt> _attemptAccount() async {
+    final AuthSession? current = _session;
+
+    if (current == null) {
+      return const _AccountAttempt.tokenRejected();
+    }
+
+    try {
+      return _AccountAttempt.read(await authApi.me(current.tokens.accessToken));
+    } on ApiFailureException catch (error) {
+      if (error.code == _unauthenticatedCode) {
+        // Left unreported on purpose: the caller decides whether an expired token
+        // deserves a renewal or is a signed-out session.
+        return const _AccountAttempt.tokenRejected();
+      }
+
+      _recordFrom(error);
+      notifyListeners();
+
+      return _AccountAttempt.rejected(error);
+    } on ApiClientException catch (error) {
+      _recordFrom(error);
+      notifyListeners();
+
+      return _AccountAttempt.unreachable(error);
+    }
+  }
+
+  /// Whether [tokens] are within [leeway] of expiring.
+  ///
+  /// An unparseable expiry counts as expiring: renewing unnecessarily costs one
+  /// request, while trusting a value that cannot be read would send a credential
+  /// that is already dead.
+  static bool _isExpiring(AuthTokens tokens, Duration leeway) {
+    final DateTime? expiresAt = DateTime.tryParse(tokens.accessTokenExpiresAt);
+
+    if (expiresAt == null) {
+      return true;
+    }
+
+    return DateTime.now().toUtc().add(leeway).isAfter(expiresAt.toUtc());
+  }
+
+  Future<void> _forgetStoredSession() async {
+    try {
+      await tokenStore.clear(config.apiBaseUrl);
+    } on Object {
+      // Nothing useful is left to do: the in-memory session is already gone and
+      // the caller is being told the truth about the state of the application.
+    }
   }
 
   /// Moves to the in-flight state and drops whatever the previous attempt left.
@@ -270,4 +477,44 @@ class AuthController extends ChangeNotifier {
     _failureCorrelationId = null;
     _failureDetails = null;
   }
+
+  /// Code the API answers when the access token is missing or no longer valid.
+  static const String _unauthenticatedCode = 'UNAUTHENTICATED';
+}
+
+/// Outcome of one `GET /auth/me` attempt.
+///
+/// The three cases are kept apart instead of collapsing into a nullable account,
+/// because "the credential was refused" and "the request was refused" call for
+/// different next steps: only the first one can be fixed by renewing the session.
+class _AccountAttempt {
+  /// The API accepted the token.
+  const _AccountAttempt.read(AuthUser this.account)
+    : error = null,
+      tokenRejected = false;
+
+  /// The API refused the request for a reason a renewal cannot fix.
+  const _AccountAttempt.rejected(ApiClientException this.error)
+    : account = null,
+      tokenRejected = false;
+
+  /// The API could not be reached.
+  const _AccountAttempt.unreachable(ApiClientException this.error)
+    : account = null,
+      tokenRejected = false;
+
+  /// The API refused the credential itself.
+  const _AccountAttempt.tokenRejected()
+    : account = null,
+      error = null,
+      tokenRejected = true;
+
+  /// The account, when the API accepted the token.
+  final AuthUser? account;
+
+  /// What went wrong, when something did. Already recorded on the controller.
+  final ApiClientException? error;
+
+  /// Whether a renewal could still make this request succeed.
+  final bool tokenRejected;
 }

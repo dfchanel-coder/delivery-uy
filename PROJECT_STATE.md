@@ -14,7 +14,7 @@ CURRENT_MODULE: Authentication - Argon2id hashing, access and refresh tokens, se
 - Product, stack, roles and order state machine defined
 - ARCHITECTURE.md, DATABASE.md, SECURITY.md, LEGAL.md finalized
 - docs/ERD.md, docs/SCHEMA_PROPOSAL.md, docs/MODULE_BOUNDARIES.md
-- ADR-001 ... ADR-020 accepted (ADR-004 and ADR-015 carry
+- ADR-001 ... ADR-021 accepted (ADR-004 and ADR-015 carry
   `LEGAL_REVIEW_REQUIRED`)
 
 ### PHASE 01 - Monorepo (foundation slice)
@@ -99,6 +99,15 @@ Applications (real, buildable, tested):
     verification message is a deployment concern that is still unbuilt (see
     CURRENT RISKS), and promising it would be the kind of fake the project
     forbids
+  - Session persistence (ADR-021): only the refresh token is written, through the
+    `TokenStore` port in `packages/dart/core`, implemented in the application by
+    `SecureTokenStore` over `flutter_secure_storage` (Android Keystore /
+    iOS keychain). `restore()` runs before `runApp`, and a 15-minute access token
+    no longer ends a live session: `loadAccount` retries once after renewing, and
+    `ensureFreshSession` renews proactively inside a leeway. The stored record is
+    namespaced by API origin so a debug build cannot replay a token issued by a
+    different deployment. `apps/merchant` and `apps/driver` still hold their
+    sessions in memory
 - `apps/merchant`, `apps/driver` - Flutter skeletons, each showing the effective
   API configuration and the planned scope, with three widget tests and stricter
   analyzer settings
@@ -260,6 +269,15 @@ Documentation updated: `ADR-020`, `SECURITY.md`, `docs/API_RULES.md`,
   `verificationRequired: false`, roles `['CUSTOMER']` and no escalation, and the
   new account's `GET /auth/me` returned `200` with `authorization: [redacted]`.
   Logged from the device as `Dart/3.13 (dart:io)`
+- `apps/customer` session persistence on the same emulator, which is the part
+  unit tests cannot reach because it is a platform channel:
+  - `POST /auth/login` -> `200`, then `am force-stop` and a cold start opened
+    straight into "Mi sesión" with the account, after exactly one
+    `POST /auth/refresh` -> `200`. The sign-in form was never rendered, and the
+    new `accessTokenExpiresAt` proved the rotated token was what got persisted
+  - `POST /auth/logout` -> `204`, then a cold start showed the form and issued
+    **zero** requests. Had the keystore entry survived sign-out, the launch would
+    have logged a `/auth/refresh` attempt
 
 ---
 
@@ -279,10 +297,11 @@ Documentation updated: `ADR-020`, `SECURITY.md`, `docs/API_RULES.md`,
   still outstanding (ADR-019).
 - PHASE 01 - Monorepo: only the Docker-backed verification of exit criterion 3 is
   outstanding (see BLOCKED).
-- Mobile: `login`, `register` and `logout` exist end to end. Tokens are still
-  held in memory only, so a restart loses the session; there is no secure storage
-  and no refresh on expiry yet, which means a 15-minute access token still ends a
-  live session
+- Mobile: `login`, `register`, `logout` and secure session persistence exist end
+  to end and are proven on the emulator (ADR-021). `apps/merchant` and
+  `apps/driver` still hold their sessions in memory only, and neither has a
+  screen beyond its own placeholder: the merchant and driver products do not
+  exist yet, so there is nothing for persistence to serve there
 
 ---
 
@@ -345,14 +364,12 @@ the orphaned children.
 
 ## NEXT
 
-1. Mobile - secure storage for the token pair, plus a refresh on expiry, so a
-   restart does not lose the session and a 15-minute access token does not end a
-   session mid-order. The port belongs in `packages/dart/core` behind an
-   interface; the platform plugin belongs in the application, so the shared
-   package stays free of plugin dependencies
-2. PHASE 03 - implement a notification provider behind
+1. PHASE 03 - implement a notification provider behind
    `PasswordRecoveryNotifier` so password recovery and address verification can
    actually deliver a message, and document the seeded bootstrap credentials
+2. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the
+   existing `TokenStore` port. Deliberately deferred: both apps are placeholders,
+   so the file would be written against nothing and would only look finished
 3. PHASE 03 / PHASE 01 - run the CI `integration` job so the compose files, not
    just reachable endpoints, are proven
 4. PHASE 04 - Users and roles: per-role permissions and guards on real endpoints,

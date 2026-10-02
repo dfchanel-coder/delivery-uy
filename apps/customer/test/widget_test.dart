@@ -39,7 +39,13 @@ Map<String, Object?> _wireTokens() {
 
 Widget _appOver(AuthApi authApi) {
   return CustomerApp(
-    controller: AuthController(authApi: authApi, config: _config),
+    controller: AuthController(
+      authApi: authApi,
+      config: _config,
+      // Tests never launch twice, so the in-memory store is the honest choice:
+      // it cannot stand in for a keystore, and nothing here needs one.
+      tokenStore: InMemoryTokenStore(),
+    ),
   );
 }
 
