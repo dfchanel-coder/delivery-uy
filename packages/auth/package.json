@@ -2,7 +2,7 @@
   "name": "@deliveryuy/auth",
   "version": "0.0.0",
   "private": true,
-  "description": "Zero-dependency security primitives: secure randomness, token hashing, constant-time comparison, RBAC policy (ADR-002, ADR-010)",
+  "description": "Security primitives: Argon2id hashing, opaque token utilities, constant-time compare, RBAC policy, JWT access-token issuer (ADR-002, ADR-010, ADR-020)",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -20,5 +20,9 @@
   },
   "devDependencies": {
     "@deliveryuy/typescript-config": "workspace:*"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "^2.2.1",
+    "jose": "^6.2.12"
   }
 }
