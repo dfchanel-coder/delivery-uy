@@ -7,11 +7,15 @@
  *   delivery zones, platform categories, the global commission rule, the
  *   feature flags declared in `packages/config` and the operational settings
  *   documented in DATABASE.md;
- * - it creates **no users**. Password hashing lands in PHASE 03, and seeding
- *   accounts before the real hashing exists would mean writing throwaway
- *   credentials or fake hashes into the database (AGENTS.md section 5). The user
- *   seed is therefore part of PHASE 03 and will reuse the production hashing
- *   implementation;
+ * - it creates development accounts for the four role families that need a
+ *   login to be exercised: ADMIN, MERCHANT, DRIVER and CUSTOMER. Their
+ *   passwords are hashed with the same Argon2id implementation the API uses
+ *   (`@deliveryuy/auth`), never with a fake or precomputed digest;
+ * - no credential has a default. `SEED_*_EMAIL` and `SEED_*_PASSWORD` are
+ *   required, because an account created with a password that is committed to
+ *   this repository is an account an attacker can guess, and the seed would
+ *   create it silently on any machine that forgot the variable
+ *   (AGENTS.md sections 5 and 61);
  * - nothing here is Rivera-specific: country, currency and timezone come from
  *   `DEFAULT_COUNTRY`, `DEFAULT_CURRENCY` and `DEFAULT_TIMEZONE`, and the city
  *   name comes from `SEED_CITY_NAME`.
@@ -20,6 +24,7 @@
  * refuses to run when the environment looks like production.
  */
 import { Prisma, PrismaClient } from '@prisma/client';
+import { hashPassword } from '@deliveryuy/auth';
 
 interface SeedConfig {
   readonly databaseUrl: string;
@@ -29,6 +34,14 @@ interface SeedConfig {
   readonly cityName: string;
   readonly appEnv: string;
   readonly nodeEnv: string;
+  readonly adminEmail: string;
+  readonly adminPassword: string;
+  readonly merchantEmail: string;
+  readonly merchantPassword: string;
+  readonly driverEmail: string;
+  readonly driverPassword: string;
+  readonly customerEmail: string;
+  readonly customerPassword: string;
 }
 
 function readConfig(): SeedConfig {
@@ -43,10 +56,39 @@ function readConfig(): SeedConfig {
     countryCode: (process.env['DEFAULT_COUNTRY'] ?? 'UY').toUpperCase(),
     currency: (process.env['DEFAULT_CURRENCY'] ?? 'UYU').toUpperCase(),
     timezone: process.env['DEFAULT_TIMEZONE'] ?? 'America/Montevideo',
+    // Not a credential, so it may keep a neutral default.
     cityName: process.env['SEED_CITY_NAME'] ?? 'Ciudad por defecto',
     appEnv: process.env['APP_ENV'] ?? 'development',
     nodeEnv: process.env['NODE_ENV'] ?? 'development',
+    adminEmail: requireEnv('SEED_ADMIN_EMAIL'),
+    adminPassword: requireEnv('SEED_ADMIN_PASSWORD'),
+    merchantEmail: requireEnv('SEED_MERCHANT_EMAIL'),
+    merchantPassword: requireEnv('SEED_MERCHANT_PASSWORD'),
+    driverEmail: requireEnv('SEED_DRIVER_EMAIL'),
+    driverPassword: requireEnv('SEED_DRIVER_PASSWORD'),
+    customerEmail: requireEnv('SEED_CUSTOMER_EMAIL'),
+    customerPassword: requireEnv('SEED_CUSTOMER_PASSWORD'),
   };
+}
+
+/**
+ * Reads a credential that must be supplied by the operator.
+ *
+ * A missing variable stops the seed instead of falling back to a committed
+ * value: creating an administrator whose password is written in this repository
+ * would be a worse outcome than not creating the account.
+ */
+function requireEnv(name: string): string {
+  const value = process.env[name];
+
+  if (value === undefined || value.trim() === '') {
+    throw new Error(
+      `${name} is required to seed development accounts. Set it in the environment; ` +
+        'the seed intentionally has no default value for it (see the header comment).',
+    );
+  }
+
+  return value;
 }
 
 function assertNotProduction(config: SeedConfig): void {
@@ -77,10 +119,11 @@ async function seed(): Promise<void> {
     await seedCommission(prisma);
     const flagCount = await seedFeatureFlags(prisma);
     const settingCount = await seedSystemConfig(prisma);
+    const userCount = await seedDevelopmentUsers(prisma, config);
 
     console.log(
       `Seed complete: country=${config.countryCode} city=${config.cityName} ` +
-        `zones=${zoneCount} flags=${flagCount} settings=${settingCount}`,
+        `zones=${zoneCount} flags=${flagCount} settings=${settingCount} users=${userCount}`,
     );
   } finally {
     await prisma.$disconnect();
@@ -242,6 +285,97 @@ async function seedSystemConfig(prisma: PrismaClient): Promise<number> {
   }
 
   return settings.length;
+}
+
+async function seedDevelopmentUsers(prisma: PrismaClient, config: SeedConfig): Promise<number> {
+  // Only `production` is refused here, and the whole script already refuses to
+  // run when APP_ENV or NODE_ENV is production (see assertNotProduction). This
+  // second guard keeps the intent explicit: the account fixtures below are
+  // development conveniences, never production bootstrap data (AGENTS.md 76).
+  const now = new Date();
+
+  // The DRIVER row needs a city, so it is created after the geography seed. It
+  // is intentionally left out of this list and handled separately.
+  const accounts: ReadonlyArray<{
+    readonly email: string;
+    readonly password: string;
+    readonly role: 'ADMIN' | 'MERCHANT' | 'CUSTOMER';
+  }> = [
+    { email: config.adminEmail, password: config.adminPassword, role: 'ADMIN' },
+    { email: config.merchantEmail, password: config.merchantPassword, role: 'MERCHANT' },
+    { email: config.customerEmail, password: config.customerPassword, role: 'CUSTOMER' },
+  ];
+
+  const city = await prisma.city.findFirst({
+    where: { countryCode: config.countryCode, name: config.cityName },
+    select: { id: true },
+  });
+
+  if (city === null) {
+    throw new Error('Seed users require the city from seedGeography to exist first.');
+  }
+
+  let created = 0;
+
+  for (const account of accounts) {
+    if (await userExists(prisma, account.email)) continue;
+
+    await prisma.user.create({
+      data: {
+        email: account.email.toLowerCase(),
+        passwordHash: await hashPassword(account.password),
+        status: 'ACTIVE',
+        emailVerifiedAt: now,
+        locale: 'es',
+        roles: { create: [{ role: account.role }] },
+        customerProfile:
+          account.role === 'CUSTOMER'
+            ? { create: { firstName: 'Cliente', lastName: 'Demo' } }
+            : undefined,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+
+    created++;
+  }
+
+  if (!(await userExists(prisma, config.driverEmail))) {
+    await prisma.user.create({
+      data: {
+        email: config.driverEmail.toLowerCase(),
+        passwordHash: await hashPassword(config.driverPassword),
+        status: 'ACTIVE',
+        emailVerifiedAt: now,
+        locale: 'es',
+        roles: { create: [{ role: 'DRIVER' }] },
+        // Driver review belongs to PHASE 05; PENDING_REVIEW is the honest
+        // starting state for a fixture rather than a pre-approved driver.
+        driverProfile: { create: { cityId: city.id, status: 'PENDING_REVIEW' } },
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+
+    created++;
+  }
+
+  return created;
+}
+
+/**
+ * Case-insensitive existence check.
+ *
+ * `users_email_lower_uniq` is a functional index on `lower(email)`, so the
+ * comparison must be lowered explicitly: a case-sensitive lookup would report
+ * "not found" for an existing row and the insert would then fail on the index.
+ */
+async function userExists(prisma: PrismaClient, email: string): Promise<boolean> {
+  const found = await prisma.$queryRaw<Array<{ exists: boolean }>>`
+    SELECT EXISTS (SELECT 1 FROM "users" WHERE lower("email") = lower(${email})) AS "exists"
+  `;
+
+  return found[0]?.exists ?? false;
 }
 
 seed().catch((error: unknown) => {
