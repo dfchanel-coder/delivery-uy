@@ -89,10 +89,25 @@ describe('RedisRateLimiter', () => {
 
     const decision = await limiter.consume('key', WINDOW);
 
-    expect(decision).toEqual({ allowed: true, limit: 3, remaining: 2, retryAfterSeconds: 60 });
+    // Zero, not 60: this request opened the window, so there is nothing to wait
+    // for. InMemoryRateLimiter answers 0 in the same situation and the two
+    // backends are expected to be indistinguishable to a caller.
+    expect(decision).toEqual({ allowed: true, limit: 3, remaining: 2, retryAfterSeconds: 0 });
     // One `eval`, not an INCR followed by an EXPIRE and a TTL: a crash between
     // two round trips would leave a counter that never expires.
     expect(redis.eval).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports the reset of an established window even while requests are allowed', async () => {
+    // The same shape as the in-memory backend: once a window exists, every
+    // decision carries its remaining time, and only the opening one reports 0.
+    const allowed = await new RedisRateLimiter(fakeRedis([2, 42])).consume('key', WINDOW);
+    expect(allowed.allowed).toBe(true);
+    expect(allowed.retryAfterSeconds).toBe(42);
+
+    const blocked = await new RedisRateLimiter(fakeRedis([4, 7])).consume('key', WINDOW);
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.retryAfterSeconds).toBe(7);
   });
 
   it('accepts the string replies Redis sends over RESP', async () => {

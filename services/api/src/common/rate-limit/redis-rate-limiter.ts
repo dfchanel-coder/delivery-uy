@@ -77,9 +77,13 @@ export class RedisRateLimiter implements RateLimiter {
       allowed: count <= limit,
       limit,
       remaining: Math.max(0, limit - count),
-      // Redis returns -1 when the key has no TTL and -2 when it is gone. Both
-      // mean "this window is already over", so the caller can retry at once.
-      retryAfterSeconds: ttl > 0 ? ttl : 0,
+      // `count === 1` means INCR created the key, so this request opened the
+      // window and there is nothing to wait for. Reporting the TTL here instead
+      // would make this backend disagree with InMemoryRateLimiter, which returns
+      // zero for the same situation, and switching RATE_LIMIT_BACKEND would then
+      // change what a caller sees. Redis also answers -1 for a key without TTL
+      // and -2 for one that is gone; both mean the window is already over.
+      retryAfterSeconds: count === 1 || ttl <= 0 ? 0 : ttl,
     };
   }
 

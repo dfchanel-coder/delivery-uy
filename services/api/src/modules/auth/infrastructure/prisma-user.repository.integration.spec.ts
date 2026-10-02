@@ -77,12 +77,26 @@ describe('PrismaUserRepository (integration)', () => {
     await withDatabase(ctx, async (client) => {
       expect(await hasEmailFunctionalIndex(client)).toBe(true);
 
-      // An index scan is asserted by the plan, not by timing: a sequential scan
-      // returns the same row, so only EXPLAIN can tell the two apart.
-      const plan = await client.$queryRawUnsafe<Array<Record<string, string>>>(
-        'EXPLAIN SELECT 1 FROM "users" u WHERE lower(u."email") = lower($1)',
-        'plan@example.com',
-      );
+      // The predicate mirrors the repository's own lookup, including the
+      // soft-delete clause. That clause is not decoration: `users_email_lower_uniq`
+      // is a *partial* index, and PostgreSQL will not consider it unless the
+      // query implies `deleted_at IS NULL`.
+      //
+      // Which plan the planner picks is still a cost decision, and on a table
+      // this small it would legitimately answer with a sequential scan. So the
+      // planner is not allowed to decide: sequential scans are priced out for
+      // the duration of the statement, and whatever index is left is the one
+      // that can serve this predicate. Both matter, because the reason the
+      // repository writes `lower(email)` instead of an insensitive match is
+      // that only the former can use the index at all.
+      const plan = await client.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL enable_seqscan = off');
+
+        return tx.$queryRawUnsafe<Array<Record<string, string>>>(
+          'EXPLAIN SELECT 1 FROM "users" u WHERE lower(u."email") = lower($1) AND u."deleted_at" IS NULL',
+          'plan@example.com',
+        );
+      });
 
       expect(Object.values(plan[0] ?? {}).join('\n')).toContain('users_email_lower_uniq');
     });

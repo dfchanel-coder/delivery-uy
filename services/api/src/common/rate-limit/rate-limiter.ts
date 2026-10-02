@@ -15,7 +15,16 @@ export interface RateLimitDecision {
   readonly allowed: boolean;
   readonly limit: number;
   readonly remaining: number;
-  /** Seconds until the window resets. Always at least 1 when blocked. */
+  /**
+   * Seconds until the current window resets.
+   *
+   * Zero when the window has just been opened, because there is nothing to wait
+   * for yet. Always at least 1 once a request is blocked.
+   *
+   * Both backends must agree on this field: switching `RATE_LIMIT_BACKEND`
+   * between the in-process and the shared store cannot be allowed to change what
+   * a caller observes.
+   */
   readonly retryAfterSeconds: number;
 }
 
