@@ -14,6 +14,11 @@ export default defineConfig({
       'services/*/src/**/*.spec.ts',
       'apps/*/src/**/*.spec.ts',
     ],
+    // Integration specs live next to the adapter they cover but are named
+    // `*.integration.spec.ts`, and the ordinary suite never runs them: they need
+    // real PostgreSQL or Redis (ADR-016). `vitest.integration.config.ts` is the
+    // other half of that split.
+    exclude: ['**/node_modules/**', '**/dist/**', '**/*.integration.spec.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],

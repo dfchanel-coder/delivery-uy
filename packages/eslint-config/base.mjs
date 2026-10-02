@@ -110,7 +110,7 @@ export function createBaseConfig({ tsconfigRootDir }) {
 export function createToolingConfig({ tsconfigRootDir }) {
   return [
     {
-      files: ['vitest.config.ts', 'test/**/*.ts'],
+      files: ['vitest.config.ts', 'vitest.integration.config.ts', 'test/**/*.ts'],
       languageOptions: {
         parserOptions: {
           projectService: false,
@@ -218,7 +218,10 @@ export function createBoundaryConfig() {
       },
     },
     {
-      files: ['**/*.spec.ts', '**/test/**/*.ts'],
+      // `*/src/testing/**` holds the shared fixtures and in-memory doubles.
+      // They are not specs themselves, but they are test code: an async stub
+      // returning a stored value legitimately has no `await`.
+      files: ['**/*.spec.ts', '**/test/**/*.ts', '**/src/testing/**/*.ts'],
       rules: {
         '@typescript-eslint/explicit-function-return-type': 'off',
         '@typescript-eslint/no-unsafe-assignment': 'off',
