@@ -11,9 +11,12 @@ enum AuthStatus {
 
   /// Credentials are held and the session page may be shown.
   signedIn,
+
+  /// The account was created but the API has not enabled access yet.
+  awaitingVerification,
 }
 
-/// Why a sign-in attempt did not open a session.
+/// Why an authentication attempt did not open a session.
 ///
 /// The interface maps this to localized copy; only the API messages themselves
 /// come from the server, because they are the only ones written for the person
@@ -51,10 +54,12 @@ class AuthController extends ChangeNotifier {
 
   AuthStatus _status = AuthStatus.signedOut;
   AuthSession? _session;
+  String? _pendingVerificationEmail;
   AuthFailureKind? _failureKind;
   String? _failureCode;
   String? _failureMessage;
   String? _failureCorrelationId;
+  Map<String, Object?>? _failureDetails;
 
   /// Current state of the session.
   AuthStatus get status => _status;
@@ -64,6 +69,9 @@ class AuthController extends ChangeNotifier {
 
   /// Access token of the open session, or null when signed out.
   String? get accessToken => _session?.tokens.accessToken;
+
+  /// Address of the account waiting for verification, when that is the state.
+  String? get pendingVerificationEmail => _pendingVerificationEmail;
 
   /// Why the last attempt failed, or null when it succeeded.
   AuthFailureKind? get failureKind => _failureKind;
@@ -75,6 +83,10 @@ class AuthController extends ChangeNotifier {
 
   /// Message supplied by the API for the last failure.
   String? get failureMessage => _failureMessage;
+
+  /// Structured details supplied by the API, such as the password policy
+  /// reasons behind a `VALIDATION_FAILED`.
+  Map<String, Object?>? get failureDetails => _failureDetails;
 
   /// Server-side log identifier for the last failure, when the API sent one.
   String? get failureCorrelationId => _failureCorrelationId;
@@ -92,9 +104,7 @@ class AuthController extends ChangeNotifier {
       return;
     }
 
-    _status = AuthStatus.submitting;
-    _clearFailure();
-    notifyListeners();
+    _begin();
 
     try {
       final AuthSession session = await authApi.login(
@@ -106,22 +116,47 @@ class AuthController extends ChangeNotifier {
 
       _session = session;
       _status = AuthStatus.signedIn;
-    } on ApiFailureException catch (error) {
-      _recordFailure(
-        kind: AuthFailureKind.rejected,
-        code: error.code,
-        message: error.failure.message,
-        correlationId: error.correlationId,
+    } on ApiClientException catch (error) {
+      _recordFrom(error);
+    }
+
+    notifyListeners();
+  }
+
+  /// Creates an account.
+  ///
+  /// The role is never sent: the API derives it from configuration and rejects
+  /// the field, so a client that offered a role choice would only invite an
+  /// escalation attempt (AGENTS.md section 8).
+  ///
+  /// A deployment that requires address verification creates the account without
+  /// issuing a session, which is a different state and not a failed sign-up: the
+  /// user has to wait for the address to be confirmed.
+  Future<void> register({required String email, required String password}) async {
+    if (_status == AuthStatus.submitting) {
+      return;
+    }
+
+    final String address = email.trim();
+    _begin();
+
+    try {
+      final AuthRegistration registration = await authApi.register(
+        email: address,
+        password: password,
       );
-    } on ApiTransportException {
-      _recordFailure(
-        kind: AuthFailureKind.unreachable,
-        code: 'API_UNREACHABLE',
-        // Not shown to the user: the interface writes its own copy for this
-        // kind, because this message would be developer facing.
-        message: null,
-        correlationId: null,
-      );
+
+      final AuthSession? session = registration.session;
+
+      if (session == null) {
+        _pendingVerificationEmail = registration.user.email;
+        _status = AuthStatus.awaitingVerification;
+      } else {
+        _session = session;
+        _status = AuthStatus.signedIn;
+      }
+    } on ApiClientException catch (error) {
+      _recordFrom(error);
     }
 
     notifyListeners();
@@ -137,6 +172,7 @@ class AuthController extends ChangeNotifier {
     final AuthSession? current = _session;
 
     _session = null;
+    _pendingVerificationEmail = null;
     _status = AuthStatus.signedOut;
     _clearFailure();
     notifyListeners();
@@ -166,27 +202,23 @@ class AuthController extends ChangeNotifier {
 
     try {
       return await authApi.me(current.tokens.accessToken);
-    } on ApiFailureException catch (error) {
-      _recordFailure(
-        kind: AuthFailureKind.rejected,
-        code: error.code,
-        message: error.failure.message,
-        correlationId: error.correlationId,
-      );
-      notifyListeners();
-
-      return null;
-    } on ApiTransportException catch (error) {
-      _recordFailure(
-        kind: AuthFailureKind.unreachable,
-        code: 'API_UNREACHABLE',
-        message: error.reason,
-        correlationId: null,
-      );
+    } on ApiClientException catch (error) {
+      _recordFrom(error);
       notifyListeners();
 
       return null;
     }
+  }
+
+  /// Returns to the sign-in form from the "account created" screen.
+  void dismissVerificationNotice() {
+    if (_status != AuthStatus.awaitingVerification) {
+      return;
+    }
+
+    _pendingVerificationEmail = null;
+    _status = AuthStatus.signedOut;
+    notifyListeners();
   }
 
   /// Forgets the last failure so a retry starts from a clean screen.
@@ -199,16 +231,34 @@ class AuthController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _recordFailure({
-    required AuthFailureKind kind,
-    required String code,
-    required String? message,
-    required String? correlationId,
-  }) {
-    _failureKind = kind;
-    _failureCode = code;
-    _failureMessage = message;
-    _failureCorrelationId = correlationId;
+  /// Moves to the in-flight state and drops whatever the previous attempt left.
+  void _begin() {
+    _status = AuthStatus.submitting;
+    _clearFailure();
+    notifyListeners();
+  }
+
+  /// Records a rejection or a transport failure.
+  ///
+  /// A request failure never keeps a session: the user asked for something they
+  /// do not have, and leaving a half-authenticated screen would be worse.
+  void _recordFrom(ApiClientException error) {
+    if (error is ApiFailureException) {
+      _failureKind = AuthFailureKind.rejected;
+      _failureCode = error.code;
+      _failureMessage = error.failure.message;
+      _failureCorrelationId = error.correlationId;
+      _failureDetails = error.failure.details;
+    } else {
+      _failureKind = AuthFailureKind.unreachable;
+      _failureCode = 'API_UNREACHABLE';
+      // Not shown to the user: the interface writes its own copy for this kind,
+      // because this message would be developer facing.
+      _failureMessage = null;
+      _failureCorrelationId = null;
+      _failureDetails = null;
+    }
+
     _session = null;
     _status = AuthStatus.signedOut;
   }
@@ -218,5 +268,6 @@ class AuthController extends ChangeNotifier {
     _failureCode = null;
     _failureMessage = null;
     _failureCorrelationId = null;
+    _failureDetails = null;
   }
 }

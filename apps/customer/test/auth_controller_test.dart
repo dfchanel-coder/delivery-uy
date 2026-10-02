@@ -196,6 +196,217 @@ void main() {
     });
   });
 
+  group('register', () {
+    test('opens a session when the API issues credentials', () async {
+      final AuthController controller = answeringWith(<String, Object?>{
+        'user': _wireUser(),
+        'tokens': _wireTokens(),
+        'verificationRequired': false,
+      });
+
+      await controller.register(
+        email: 'new@deliveryuy.local',
+        password: 'a-long-enough-one',
+      );
+
+      expect(controller.status, AuthStatus.signedIn);
+      expect(controller.session!.user.email, 'customer@deliveryuy.local');
+      expect(controller.accessToken, isNotNull);
+      expect(controller.pendingVerificationEmail, isNull);
+    });
+
+    test('sends only the address and the secret, never a role', () async {
+      // Self registration cannot pick a role: the API rejects the field, and a
+      // client that offered the choice would invite an escalation attempt
+      // (AGENTS.md section 8).
+      final AuthController controller = answeringWith(<String, Object?>{
+        'user': _wireUser(),
+        'tokens': _wireTokens(),
+        'verificationRequired': false,
+      });
+
+      await controller.register(email: '  new@deliveryuy.local  ', password: 'secret');
+
+      expect(jsonDecode(sent.single.body), <String, Object?>{
+        'email': 'new@deliveryuy.local',
+        'password': 'secret',
+      });
+    });
+
+    test('waits for verification when the API issues no credentials', () async {
+      // Not a failed sign-up: the account exists, it just cannot sign in yet.
+      // Treating this as an error would push the user into creating a second
+      // account for the same address.
+      final AuthController controller = answeringWith(<String, Object?>{
+        'user': _wireUser(status: 'PENDING_VERIFICATION'),
+        'tokens': null,
+        'verificationRequired': true,
+      });
+
+      await controller.register(
+        email: 'new@deliveryuy.local',
+        password: 'a-long-enough-one',
+      );
+
+      expect(controller.status, AuthStatus.awaitingVerification);
+      expect(controller.pendingVerificationEmail, 'customer@deliveryuy.local');
+      expect(controller.session, isNull);
+      expect(controller.accessToken, isNull);
+      expect(controller.failureKind, isNull);
+    });
+
+    test('keeps the reasons the API gave for a rejected password', () async {
+      // The password policy lives in server configuration, so the interface
+      // repeats what the API said instead of inventing a local rule that could
+      // disagree with it.
+      final AuthController controller = controllerOver(
+        (_) async => http.Response(
+          jsonEncode(<String, Object?>{
+            'error': <String, Object?>{
+              'code': 'VALIDATION_FAILED',
+              'message': 'Password does not meet the requirements.',
+              'details': <String, Object?>{
+                'reasons': <String>['Password must contain at least 10 characters.'],
+              },
+            },
+          }),
+          400,
+          headers: <String, String>{'content-type': 'application/json'},
+        ),
+      );
+
+      await controller.register(email: 'new@deliveryuy.local', password: 'short');
+
+      expect(controller.status, AuthStatus.signedOut);
+      expect(controller.failureKind, AuthFailureKind.rejected);
+      expect(controller.failureCode, 'VALIDATION_FAILED');
+      expect(controller.failureDetails?['reasons'], <String>[
+        'Password must contain at least 10 characters.',
+      ]);
+    });
+
+    test('reports an address that is already registered without exposing it', () async {
+      final AuthController controller = controllerOver(
+        (_) async => http.Response(
+          jsonEncode(<String, Object?>{
+            'error': <String, Object?>{
+              'code': 'EMAIL_ALREADY_REGISTERED',
+              'message': 'That email address cannot be registered.',
+            },
+          }),
+          409,
+          headers: <String, String>{'content-type': 'application/json'},
+        ),
+      );
+
+      await controller.register(
+        email: 'customer@deliveryuy.local',
+        password: 'a-long-enough-one',
+      );
+
+      expect(controller.status, AuthStatus.signedOut);
+      expect(controller.failureCode, 'EMAIL_ALREADY_REGISTERED');
+      expect(controller.pendingVerificationEmail, isNull);
+    });
+
+    test('ignores a second tap while a registration is in flight', () async {
+      final Completer<void> gate = Completer<void>();
+      final AuthController controller = controllerOver((_) async {
+        await gate.future;
+
+        return http.Response(
+          jsonEncode(<String, Object?>{
+            'data': <String, Object?>{
+              'user': _wireUser(),
+              'tokens': _wireTokens(),
+              'verificationRequired': false,
+            },
+          }),
+          200,
+          headers: <String, String>{'content-type': 'application/json'},
+        );
+      });
+
+      final Future<void> first = controller.register(
+        email: 'new@deliveryuy.local',
+        password: 'a-long-enough-one',
+      );
+      await controller.register(
+        email: 'other@deliveryuy.local',
+        password: 'a-long-enough-one',
+      );
+
+      gate.complete();
+      await first;
+
+      expect(sent, hasLength(1));
+      expect(controller.status, AuthStatus.signedIn);
+    });
+  });
+
+  group('dismissVerificationNotice', () {
+    test('returns to the sign-in form and forgets the address', () async {
+      final AuthController controller = answeringWith(<String, Object?>{
+        'user': _wireUser(status: 'PENDING_VERIFICATION'),
+        'tokens': null,
+        'verificationRequired': true,
+      });
+
+      await controller.register(
+        email: 'new@deliveryuy.local',
+        password: 'a-long-enough-one',
+      );
+      controller.dismissVerificationNotice();
+
+      expect(controller.status, AuthStatus.signedOut);
+      expect(controller.pendingVerificationEmail, isNull);
+    });
+
+    test('does nothing while the account is signed in', () async {
+      // The notice is not a way out of a live session.
+      final AuthController controller = answeringWith(<String, Object?>{
+        'user': _wireUser(),
+        'tokens': _wireTokens(),
+        'verificationRequired': false,
+      });
+
+      await controller.signIn(email: 'customer@deliveryuy.local', password: 'secret');
+      controller.dismissVerificationNotice();
+
+      expect(controller.status, AuthStatus.signedIn);
+      expect(controller.session, isNotNull);
+    });
+  });
+
+  group('clearFailure', () {
+    test('forgets the last failure and notifies once', () async {
+      final AuthController controller = controllerOver(
+        (_) async => http.Response(
+          jsonEncode(<String, Object?>{
+            'error': <String, Object?>{
+              'code': 'INVALID_CREDENTIALS',
+              'message': 'Email or password is not correct.',
+            },
+          }),
+          401,
+          headers: <String, String>{'content-type': 'application/json'},
+        ),
+      );
+
+      await controller.signIn(email: 'customer@deliveryuy.local', password: 'wrong');
+
+      int notifications = 0;
+      controller.addListener(() => notifications++);
+
+      controller.clearFailure();
+      expect(controller.failureKind, isNull);
+      expect(notifications, 1);
+
+      controller.clearFailure();
+      expect(notifications, 1, reason: 'no change means no notification');
+    });
+  });
+
   group('loadAccount', () {
     test('reads the account behind the current access token', () async {
       final AuthController controller = controllerOver((http.Request request) async {

@@ -83,11 +83,22 @@ Applications (real, buildable, tested):
   the degraded readiness card with the API correlation id
 - `apps/customer` - Flutter application with the authentication slice working
   end to end against the real API: `AuthController` (session state, tokens in
-  memory only), sign-in and session screens, and a "verify against the API"
-  action that calls `GET /auth/me` with the access token. 12 controller tests and
-  7 widget tests. Cleartext HTTP is enabled in the **debug** manifest only, so a
-  debug build can reach `http://10.0.2.2:3000`; the release manifest keeps the
-  Android 9+ block
+  memory only, `awaitingVerification` for an account the API has not enabled
+  yet) and three screens - `AuthPage` (a segmented control over `SignInForm` and
+  `SignUpForm`, a shared failure banner, no named routes), `SessionPage` and
+  `VerificationPendingPage`. A session page action calls `GET /auth/me` with the
+  access token. 21 controller tests and 13 widget tests. Cleartext HTTP is
+  enabled in the **debug** manifest only, so a debug build can reach
+  `http://10.0.2.2:3000`; the release manifest keeps the Android 9+ block
+  - Registration never sends a role, and the password policy is not duplicated on
+    the client: the interface repeats the `details.reasons` the API returns
+    instead of keeping a length rule that could drift from
+    `PASSWORD_MIN_LENGTH`
+  - `VerificationPendingPage` states only that the account exists and cannot sign
+    in yet. It does not claim a message was sent, because delivery of the
+    verification message is a deployment concern that is still unbuilt (see
+    CURRENT RISKS), and promising it would be the kind of fake the project
+    forbids
 - `apps/merchant`, `apps/driver` - Flutter skeletons, each showing the effective
   API configuration and the planned scope, with three widget tests and stricter
   analyzer settings
@@ -244,9 +255,11 @@ Documentation updated: `ADR-020`, `SECURITY.md`, `docs/API_RULES.md`,
   trace
 - `apps/admin` -> `200` on `/` and `/health`, rendering the API liveness and the
   degraded readiness card with the backend correlation id
-- `apps/customer` on an Android emulator -> real sign-in against
-  `http://10.0.2.2:3000`, showing the account the API returned; `GET /auth/me`
-  with the issued token succeeds from the device
+- `apps/customer` on an Android emulator -> real sign-in and real self-registration
+  against `http://10.0.2.2:3000`: `POST /auth/register` answered `201` with
+  `verificationRequired: false`, roles `['CUSTOMER']` and no escalation, and the
+  new account's `GET /auth/me` returned `200` with `authorization: [redacted]`.
+  Logged from the device as `Dart/3.13 (dart:io)`
 
 ---
 
@@ -266,10 +279,10 @@ Documentation updated: `ADR-020`, `SECURITY.md`, `docs/API_RULES.md`,
   still outstanding (ADR-019).
 - PHASE 01 - Monorepo: only the Docker-backed verification of exit criterion 3 is
   outstanding (see BLOCKED).
-- Mobile: only `login` and `logout` exist end to end. Tokens are held in memory,
-  so a restart loses the session; there is no secure storage and no refresh on
-  expiry yet. `AuthApi.register` exists in the shared package but the customer
-  application has no registration screen yet.
+- Mobile: `login`, `register` and `logout` exist end to end. Tokens are still
+  held in memory only, so a restart loses the session; there is no secure storage
+  and no refresh on expiry yet, which means a 15-minute access token still ends a
+  live session
 
 ---
 
@@ -334,19 +347,19 @@ the orphaned children.
 
 1. Mobile - secure storage for the token pair, plus a refresh on expiry, so a
    restart does not lose the session and a 15-minute access token does not end a
-   session mid-order
-2. Mobile - registration screen on top of the existing `AuthApi.register`, and the
-   pending-verification path the shared package already models
-3. PHASE 03 - implement a notification provider behind
+   session mid-order. The port belongs in `packages/dart/core` behind an
+   interface; the platform plugin belongs in the application, so the shared
+   package stays free of plugin dependencies
+2. PHASE 03 - implement a notification provider behind
    `PasswordRecoveryNotifier` so password recovery and address verification can
    actually deliver a message, and document the seeded bootstrap credentials
-4. PHASE 03 / PHASE 01 - run the CI `integration` job so the compose files, not
+3. PHASE 03 / PHASE 01 - run the CI `integration` job so the compose files, not
    just reachable endpoints, are proven
-5. PHASE 04 - Users and roles: per-role permissions and guards on real endpoints,
+4. PHASE 04 - Users and roles: per-role permissions and guards on real endpoints,
    starting from the matrix `packages/auth` already owns
-6. Implement provider adapters behind the existing interfaces (map, payment,
+5. Implement provider adapters behind the existing interfaces (map, payment,
    storage) instead of extending the "not configured" guards
-7. Promote the admin HTTP client to `packages/` only when a second web client
+6. Promote the admin HTTP client to `packages/` only when a second web client
    needs it (ADR-018)
 
 ---

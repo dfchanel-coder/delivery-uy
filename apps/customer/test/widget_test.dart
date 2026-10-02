@@ -2,6 +2,7 @@
 
 import 'package:deliveryuy_core/deliveryuy_core.dart';
 import 'package:deliveryuy_customer/src/auth_controller.dart';
+import 'package:deliveryuy_customer/src/auth_page.dart';
 import 'package:deliveryuy_customer/src/customer_app.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,11 +14,11 @@ const AppConfig _config = AppConfig(
   apiTimeout: Duration(seconds: 5),
 );
 
-Map<String, Object?> _wireUser() {
+Map<String, Object?> _wireUser({String status = 'ACTIVE'}) {
   return <String, Object?>{
     'id': '3f0b3f2c-6f1a-4a0d-9f6a-3a1c9a0d2b11',
     'email': 'customer@deliveryuy.local',
-    'status': 'ACTIVE',
+    'status': status,
     'roles': <String>['CUSTOMER'],
     'locale': 'es-UY',
     'emailVerifiedAt': null,
@@ -51,11 +52,36 @@ AuthApi _apiOver(Future<http.Response> Function(http.Request) handler) {
   );
 }
 
+/// The submit action of a form.
+///
+/// Scoped to the button because the same word labels the segmented control, and
+/// a bare text finder would match both.
+Finder _submit(String label) => find.widgetWithText(FilledButton, label);
+
+/// One segment of the mode switch.
+Finder _segment(String label) => find.descendant(
+      of: find.byType(SegmentedButton<AuthMode>),
+      matching: find.text(label),
+    );
+
 void main() {
   Future<void> fillCredentials(WidgetTester tester) async {
     await tester.enterText(find.byType(TextFormField).at(0), 'customer@deliveryuy.local');
     await tester.enterText(find.byType(TextFormField).at(1), 'LocalCustomer-2026!');
-    await tester.tap(find.text('Ingresar'));
+    await tester.tap(_submit('Ingresar'));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> openSignUp(WidgetTester tester) async {
+    await tester.tap(_segment('Crear cuenta'));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> fillSignUp(WidgetTester tester) async {
+    await tester.enterText(find.byType(TextFormField).at(0), 'nuevo@deliveryuy.local');
+    await tester.enterText(find.byType(TextFormField).at(1), 'LocalCustomer-2026!');
+    await tester.enterText(find.byType(TextFormField).at(2), 'LocalCustomer-2026!');
+    await tester.tap(_submit('Crear cuenta'));
     await tester.pumpAndSettle();
   }
 
@@ -75,8 +101,34 @@ void main() {
 
     expect(find.text('Correo electrónico'), findsOneWidget);
     expect(find.text('Contraseña'), findsOneWidget);
-    expect(find.text('Ingresar'), findsOneWidget);
+    expect(_submit('Ingresar'), findsOneWidget);
+    expect(_submit('Crear cuenta'), findsNothing);
     expect(find.textContaining('/api/v1'), findsOneWidget);
+  });
+
+  testWidgets('el selector permite pasar al registro', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      _appOver(
+        _apiOver(
+          (_) async => http.Response(
+            jsonEncode(<String, Object?>{'data': null}),
+            204,
+          ),
+        ),
+      ),
+    );
+
+    await openSignUp(tester);
+
+    expect(find.text('Repetir contraseña'), findsOneWidget);
+    expect(_submit('Crear cuenta'), findsOneWidget);
+    expect(_submit('Ingresar'), findsNothing);
+
+    await tester.tap(find.text('Ya tengo cuenta'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Repetir contraseña'), findsNothing);
+    expect(_submit('Ingresar'), findsOneWidget);
   });
 
   testWidgets('no envía nada si el correo está vacío', (WidgetTester tester) async {
@@ -92,10 +144,35 @@ void main() {
     );
 
     await tester.enterText(find.byType(TextFormField).at(1), 'secret');
-    await tester.tap(find.text('Ingresar'));
+    await tester.tap(_submit('Ingresar'));
     await tester.pumpAndSettle();
 
     expect(find.text('Ingresa tu correo electrónico.'), findsOneWidget);
+    expect(sent, isEmpty);
+  });
+
+  testWidgets('no crea la cuenta si las contraseñas no coinciden', (
+    WidgetTester tester,
+  ) async {
+    final List<http.Request> sent = <http.Request>[];
+    await tester.pumpWidget(
+      _appOver(
+        _apiOver((http.Request request) async {
+          sent.add(request);
+
+          return http.Response('', 204);
+        }),
+      ),
+    );
+
+    await openSignUp(tester);
+    await tester.enterText(find.byType(TextFormField).at(0), 'nuevo@deliveryuy.local');
+    await tester.enterText(find.byType(TextFormField).at(1), 'LocalCustomer-2026!');
+    await tester.enterText(find.byType(TextFormField).at(2), 'otra-cosa-distinta');
+    await tester.tap(_submit('Crear cuenta'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Las contraseñas no coinciden.'), findsOneWidget);
     expect(sent, isEmpty);
   });
 
@@ -155,7 +232,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Sesión iniciada'), findsNothing);
-    expect(find.text('Ingresar'), findsOneWidget);
+    expect(_submit('Ingresar'), findsOneWidget);
   });
 
   testWidgets('un servidor inalcanzable produce un mensaje de conexión', (
@@ -204,7 +281,7 @@ void main() {
     await tester.tap(find.byTooltip('Cerrar sesión'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Ingresar'), findsOneWidget);
+    expect(_submit('Ingresar'), findsOneWidget);
     expect(find.text('Sesión iniciada'), findsNothing);
   });
 
@@ -246,5 +323,138 @@ void main() {
     expect(find.text('Sesión verificada contra la API'), findsOneWidget);
     expect(sent.last.url.path, '/api/v1/auth/me');
     expect(sent.last.headers['Authorization'], 'Bearer header.payload.signature');
+  });
+
+  testWidgets('un registro aceptado abre la sesión', (WidgetTester tester) async {
+    final List<http.Request> sent = <http.Request>[];
+    await tester.pumpWidget(
+      _appOver(
+        _apiOver((http.Request request) async {
+          sent.add(request);
+
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(),
+                'tokens': _wireTokens(),
+                'verificationRequired': false,
+              },
+            }),
+            200,
+            headers: <String, String>{'content-type': 'application/json'},
+          );
+        }),
+      ),
+    );
+
+    await openSignUp(tester);
+    await fillSignUp(tester);
+
+    expect(find.text('Sesión iniciada'), findsOneWidget);
+    expect(sent.single.url.path, '/api/v1/auth/register');
+  });
+
+  testWidgets('un registro que exige verificación no promete un correo', (
+    WidgetTester tester,
+  ) async {
+    // The API creates the account but has no configured delivery channel, so
+    // the screen must not claim a message was sent: promising one the platform
+    // never delivered is exactly the kind of fake the project forbids
+    // (AGENTS.md section 5).
+    await tester.pumpWidget(
+      _appOver(
+        _apiOver(
+          (_) async => http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(status: 'PENDING_VERIFICATION'),
+                'tokens': null,
+                'verificationRequired': true,
+              },
+            }),
+            201,
+            headers: <String, String>{'content-type': 'application/json'},
+          ),
+        ),
+      ),
+    );
+
+    await openSignUp(tester);
+    await fillSignUp(tester);
+
+    expect(find.text('Tu cuenta está pendiente de verificación'), findsOneWidget);
+    expect(find.textContaining('customer@deliveryuy.local'), findsOneWidget);
+    expect(find.textContaining('enviamos'), findsNothing);
+    expect(find.textContaining('revisá tu correo'), findsNothing);
+    expect(find.textContaining('te envi'), findsNothing);
+    expect(find.text('Sesión iniciada'), findsNothing);
+  });
+
+  testWidgets('la pantalla de verificación vuelve al ingreso', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      _appOver(
+        _apiOver(
+          (_) async => http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(status: 'PENDING_VERIFICATION'),
+                'tokens': null,
+                'verificationRequired': true,
+              },
+            }),
+            201,
+            headers: <String, String>{'content-type': 'application/json'},
+          ),
+        ),
+      ),
+    );
+
+    await openSignUp(tester);
+    await fillSignUp(tester);
+    await tester.tap(find.text('Ir a ingresar'));
+    await tester.pumpAndSettle();
+
+    // Back on the forms, in sign-in mode: the switcher is a new widget because
+    // the pending screen replaced it, so it starts from its own default.
+    expect(find.text('Tu cuenta está pendiente de verificación'), findsNothing);
+    expect(_submit('Ingresar'), findsOneWidget);
+  });
+
+  testWidgets('un registro rechazado muestra los motivos del API', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      _appOver(
+        _apiOver(
+          (_) async => http.Response(
+            jsonEncode(<String, Object?>{
+              'error': <String, Object?>{
+                'code': 'VALIDATION_FAILED',
+                'message': 'Password does not meet the requirements.',
+                'details': <String, Object?>{
+                  'reasons': <String>[
+                    'Password must contain at least 10 characters.',
+                  ],
+                },
+              },
+            }),
+            400,
+            headers: <String, String>{'content-type': 'application/json'},
+          ),
+        ),
+      ),
+    );
+
+    await openSignUp(tester);
+    await fillSignUp(tester);
+
+    expect(find.text('Password does not meet the requirements.'), findsOneWidget);
+    expect(
+      find.text('• Password must contain at least 10 characters.'),
+      findsOneWidget,
+    );
+    expect(find.text('Sesión iniciada'), findsNothing);
   });
 }
