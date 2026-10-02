@@ -3,6 +3,9 @@ dist/
 coverage/
 *.tsbuildinfo
 
+# Test output, not source.
+integration-report.json
+
 package-lock.json
 pnpm-lock.yaml
 .next/

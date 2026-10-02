@@ -19,6 +19,8 @@
     "test": "pnpm run build && vitest run",
     "test:watch": "vitest",
     "test:coverage": "pnpm run build && vitest run --coverage",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration:coverage": "vitest run --config vitest.integration.config.ts --coverage",
     "dev:api": "pnpm --filter @deliveryuy/api run dev",
     "dev:admin": "pnpm --filter @deliveryuy/admin run dev",
     "build:admin": "cross-env NEXT_TELEMETRY_DISABLED=1 NEXT_STANDALONE_OUTPUT=false pnpm --filter @deliveryuy/admin run build",
