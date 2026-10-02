@@ -7,6 +7,8 @@ export {
   type HealthCheckStatus,
 } from './client.js';
 
+export { AppRole, RiskSeverity, UserStatus, VerificationTokenType } from './enums.js';
+
 export {
   SOFT_DELETABLE_TABLES,
   isSoftDeletable,
@@ -15,4 +17,4 @@ export {
   type SoftDeletableTable,
 } from './soft-delete.js';
 
-export type { Prisma } from '@prisma/client';
+export { Prisma } from '@prisma/client';
