@@ -4,73 +4,16 @@ import type { PrismaClient } from '@deliveryuy/database';
 import type Redis from 'ioredis';
 import { HealthService } from './health.service.js';
 import { AppConfigService } from '../../common/config/app-config.service.js';
+import { testAppConfig } from '../../testing/app-config.fixture.js';
 
 function buildConfigService(): AppConfigService {
-  return new AppConfigService({
-    env: 'test',
-    isProduction: false,
-    service: {
-      name: 'api',
-      port: 3000,
-      internalPort: 3001,
-      url: 'http://localhost:3000',
-      bodyLimit: '1mb',
-      corsOrigins: [],
-    },
-    database: { url: 'postgresql://localhost:5432/test', poolSize: 1 },
-    redis: { url: 'redis://localhost:6379' },
-    health: { timeoutMs: 100 },
-    auth: {
-      accessSecret: 'a'.repeat(40),
-      refreshSecret: 'b'.repeat(40),
-      accessExpiresIn: '15m',
-      refreshExpiresIn: '30d',
-      issuer: 'deliveryuy',
-      audience: 'deliveryuy-clients',
-      loginMaxAttempts: 5,
-      loginLockMinutes: 15,
-      passwordArgon2MemoryKib: 65536,
-      passwordArgon2Iterations: 3,
-      passwordMinLength: 10,
-    },
-    deliveryCode: {
-      length: 6,
-      numericOnly: true,
-      ttlHours: 24,
-      maxAttempts: 5,
-      lockMinutes: 15,
-    },
-    dispatch: {
-      strategy: 'proximity-v1',
-      batchSize: 5,
-      offerTtlSeconds: 45,
-      maxRounds: 10,
-      crossCity: false,
-    },
-    gps: {
-      intervalSeconds: 5,
-      positionTtlSeconds: 120,
-      historyEnabled: false,
-      historyRetentionHours: 24,
-    },
-    defaults: { country: 'UY', currency: 'UYU', timezone: 'America/Montevideo' },
-    retention: {
-      runtimeConfigCacheSeconds: 30,
-      sessionDays: 30,
-      idempotencyDays: 7,
-      webhookEventDays: 30,
-      outboxDays: 7,
-    },
-    providers: {
-      map: { provider: 'none' },
-      payment: { provider: 'none' },
-      billing: { provider: 'none' },
-      notification: { provider: 'none' },
-      storage: { provider: 'local', localPath: './var/storage' },
-    },
-    observability: { logLevel: 'silent', otelEnabled: false },
-    featureFlags: {},
-  });
+  return new AppConfigService(
+    testAppConfig({
+      // A failed probe must fail fast, so the timeout stays short.
+      health: { timeoutMs: 100 },
+      observability: { logLevel: 'silent' },
+    }),
+  );
 }
 
 function fakeDatabase(behaviour: 'up' | 'down'): PrismaClient {

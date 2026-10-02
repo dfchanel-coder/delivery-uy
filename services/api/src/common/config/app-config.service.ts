@@ -33,6 +33,10 @@ export class AppConfigService {
     return this.config.auth;
   }
 
+  get rateLimit(): AppConfig['rateLimit'] {
+    return this.config.rateLimit;
+  }
+
   get health(): AppConfig['health'] {
     return this.config.health;
   }

@@ -6,8 +6,17 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { HealthLiveness, HealthReadiness } from '@deliveryuy/types';
+import { Public } from '../../common/security/endpoint-security.js';
 import { HealthService } from './health.service.js';
 
+/**
+ * Operational probes.
+ *
+ * Public by necessity: an orchestrator that has to present a token to learn
+ * whether the process is alive cannot do its job, and a probe leaks nothing.
+ * Everything else in the API requires a token.
+ */
+@Public()
 @ApiTags('health')
 @Controller('health')
 export class HealthController {

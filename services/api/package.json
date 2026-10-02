@@ -13,6 +13,7 @@
     "clean": "tsc -b --clean"
   },
   "dependencies": {
+    "@deliveryuy/auth": "workspace:*",
     "@deliveryuy/config": "workspace:*",
     "@deliveryuy/database": "workspace:*",
     "@deliveryuy/types": "workspace:*",

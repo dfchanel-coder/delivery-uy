@@ -23,10 +23,44 @@ export const SWAGGER_PATH = 'api/docs';
 export async function createApp(): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule);
 
+  configureApp(app);
+
+  return app;
+}
+
+/**
+ * The single Express setting this module reads.
+ *
+ * Nest types `HttpServer.getInstance()` as `any`; naming the one method used
+ * here keeps the call type-checked without depending on `@types/express`
+ * (AGENTS.md section 95, dependency policy).
+ */
+interface HttpServerInstance {
+  set(setting: 'trust proxy', value: number): void;
+}
+
+/**
+ * Applies every global concern to an application instance.
+ *
+ * Separate from {@link createApp} so a test can build the application itself
+ * (with providers replaced) and still run against the identical configuration.
+ * There is no test-only branch here: what the tests exercise is what production
+ * runs.
+ */
+export function configureApp(app: INestApplication): void {
   app.use(helmet());
   app.enableShutdownHooks();
 
   const config = app.get(AppConfigService).get();
+
+  // Trusting `X-Forwarded-For` is what makes `request.ip` (used by rate limits
+  // and audit records) the real client address, but only as many hops as the
+  // deployment actually declares. Trusting it blindly would let any caller forge
+  // its own address (SECURITY.md "Rate Limits").
+  if (config.auth.trustProxyHops > 0) {
+    const server = app.getHttpAdapter().getInstance() as HttpServerInstance;
+    server.set('trust proxy', config.auth.trustProxyHops);
+  }
 
   app.setGlobalPrefix(API_PREFIX);
   app.enableCors({
@@ -73,6 +107,4 @@ export async function createApp(): Promise<INestApplication> {
   SwaggerModule.setup(SWAGGER_PATH, app, swaggerDocument, {
     swaggerOptions: { persistAuthorization: false },
   });
-
-  return app;
 }

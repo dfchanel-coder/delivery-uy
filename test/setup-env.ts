@@ -17,6 +17,12 @@ const defaults: Record<string, string> = {
   CORS_ORIGINS: 'http://localhost:3001',
   LOG_LEVEL: 'silent',
   DISPATCH_STRATEGY: 'proximity-v1',
+  // Tests run without Redis, so throttling uses the in-process backend. The
+  // Redis backend is exercised by the integration job, which has a real server.
+  RATE_LIMIT_BACKEND: 'memory',
+  // Cheap enough that the suite is not dominated by hashing.
+  PASSWORD_ARGON2_MEMORY_KIB: '8192',
+  PASSWORD_ARGON2_ITERATIONS: '1',
 };
 
 for (const [key, value] of Object.entries(defaults)) {
