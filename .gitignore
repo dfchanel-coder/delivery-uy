@@ -28,6 +28,12 @@ Thumbs.db
 .pub-cache/
 .pub/
 
+# Expo tooling output. This project is Flutter, so nothing here is ever part of
+# the build, and `.expo/dev/logs/start.log` records the environment it was
+# started with: it would put the JWT secrets of a local `.env` in the repository
+# the next time someone runs `git add`.
+.expo/
+
 ios/Pods/
 android/.gradle/
 

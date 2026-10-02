@@ -77,6 +77,34 @@ Pool note: the integration suite runs `pool: 'forks'` with `singleFork` because
 `PRISMA_RESET_DATABASE`-style truncation and Redis key cleanup are not safe to
 run concurrently against one database.
 
+#### Running the suite without Docker
+
+The compose files remain the documented infrastructure, but the suite only needs
+two reachable endpoints, so it can also be pointed at a local PostgreSQL and
+Redis. The environment must be exported in the **calling** process:
+`vitest.integration.config.ts` has no `setupFiles`, so it inherits whatever the
+process already has, which is exactly what CI does through the job's `env:`.
+
+```powershell
+$env:DATABASE_URL = 'postgresql://delivery:delivery@localhost:5432/deliveryuy_test'
+$env:REDIS_URL = 'redis://localhost:6379'
+pnpm run test:integration
+node scripts/assert-integration-report.mjs
+```
+
+Local PostgreSQL and Redis versions must match the compose ones (PostgreSQL 16,
+Redis 7); a different major version can make a migration or a Lua script pass
+locally and fail in CI, which is worse than not running the suite at all.
+
+**Transaction and pool timings differ from CI.** Two concurrent interactive
+transactions serialise, and the wait is a fixed penalty rather than something
+`poolSize` can absorb. `createDatabaseClient` therefore sets
+`transactionOptions.maxWait` (`DEFAULT_TRANSACTION_MAX_WAIT_MS`, 10 s) on top of
+the URL `connection_limit`: the refresh rotation and redemption paths both take
+a transaction, and with the Prisma default of 2 s two simultaneous refreshes
+produced `500` instead of `REFRESH_TOKEN_REUSED`. Both behaviours are pinned by
+`packages/database/src/client.spec.ts` and by the integration specs.
+
 ### API tests
 
 Test:
@@ -112,6 +140,16 @@ Test:
 Dart workspaces: `packages/dart/core` (shared contracts) and the three
 applications. Widget tests assert what the user sees, including that a screen
 never presents simulated data as if it were real.
+
+`packages/dart/core` is tested against a `MockClient` rather than a server, so
+the HTTP layer is exercised without a deployment: envelope decoding, the
+distinction between a rejected request and an unreachable server, timeout
+handling, and the fact that `Authorization` is only sent when a token is
+supplied. The applications then test only what they add: the customer app
+asserts that a rejected sign-in shows the API message and its correlation id,
+that an unreachable server shows connectivity copy instead, that the access
+token never reaches the screen, and that a second tap while a sign-in is in
+flight does not open a second session (AGENTS.md section 43).
 
 ### Schema convention tests
 

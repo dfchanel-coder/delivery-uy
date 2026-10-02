@@ -55,7 +55,13 @@ Shared packages:
   interfaces with explicit "not configured" guards instead of fake adapters
 - `packages/ui` - README explaining why it is intentionally empty for now
 - `packages/dart/core` (`deliveryuy_core`) - shared Dart contracts: validated
-  build configuration and the `/api/v1` envelope decoder, 15 unit tests
+  build configuration, the `/api/v1` envelope decoder, an `ApiClient` and the
+  authentication contracts (`AuthUser`, `AuthTokens`, `AuthSession`,
+  `AuthRegistration`, `AuthApi`). 52 unit tests, all against a `MockClient`
+  instead of a server. The client is stateless with respect to credentials: the
+  access token is passed per call, because login and refresh must reach the API
+  without one and a client that remembered the last token would send it to
+  endpoints that should never see it
 
 Backend:
 
@@ -75,9 +81,16 @@ Applications (real, buildable, tested):
   typed errors and zod validation (13 unit tests); `src/lib/config.ts` validates
   `API_URL`/`API_TIMEOUT_MS`; `next build` and `next start` verified, including
   the degraded readiness card with the API correlation id
-- `apps/customer`, `apps/merchant`, `apps/driver` - Flutter skeletons, each
-  showing the effective API configuration and the planned scope, with three
-  widget tests and stricter analyzer settings
+- `apps/customer` - Flutter application with the authentication slice working
+  end to end against the real API: `AuthController` (session state, tokens in
+  memory only), sign-in and session screens, and a "verify against the API"
+  action that calls `GET /auth/me` with the access token. 12 controller tests and
+  7 widget tests. Cleartext HTTP is enabled in the **debug** manifest only, so a
+  debug build can reach `http://10.0.2.2:3000`; the release manifest keeps the
+  Android 9+ block
+- `apps/merchant`, `apps/driver` - Flutter skeletons, each showing the effective
+  API configuration and the planned scope, with three widget tests and stricter
+  analyzer settings
 - ESLint boundary rules forbid applications from importing `@prisma/client`,
   `@deliveryuy/database` or backend sources
 
@@ -93,8 +106,10 @@ Infrastructure and automation:
 
 ### PHASE 02 - Database (schema, migration, seed)
 
-Written and statically verified on 2026-10-01. **Not yet applied to a running
-database** - see BLOCKED and ADR-019.
+**Applied to a real PostgreSQL 16 database on 2026-10-02**: `prisma migrate
+deploy` applies `0001_init` cleanly to `deliveryuy` and `deliveryuy_test`, and
+`migrate status` reports the schema up to date. The seed runs twice with the
+snapshot comparison green. The compose-based proof in CI is still outstanding.
 
 - `packages/database/prisma/schema.prisma`: 42 models, 26 enums, applied from
   `docs/SCHEMA_PROPOSAL.md`. Every table and column is mapped explicitly to
@@ -133,8 +148,11 @@ typecheck, lint and the vitest suite.
 
 ### PHASE 03 - Authentication
 
-Implemented and statically verified on 2026-10-02. **Not closed**: the
-infrastructure-dependent half is unproven locally, see BLOCKED and IN_PROGRESS.
+Implemented on 2026-10-02 and **verified against real infrastructure**: the four
+Prisma adapters and the Redis limiter ran in the integration suite with 0
+skipped, and the API was exercised over HTTP. **Not closed**: password recovery
+and address verification still have no delivery channel, and the CI
+`integration` job has not run (see BLOCKED and IN_PROGRESS).
 
 `packages/auth` (ADR-020):
 
@@ -220,83 +238,115 @@ Documentation updated: `ADR-020`, `SECURITY.md`, `docs/API_RULES.md`,
   infrastructure running
 - `GET /api/v1/health/ready` -> `503` with
   `{"error":{"code":"SERVICE_UNAVAILABLE",...,"correlationId":"..."}}` while
-  PostgreSQL/Redis are unreachable
+  PostgreSQL/Redis are unreachable, and `200 {"status":"ready",...}` with both
+  reporting `up` and their latencies while they are running
 - `GET /api/v1/<unknown>` -> `404` structured `NOT_FOUND` envelope, no stack
   trace
 - `apps/admin` -> `200` on `/` and `/health`, rendering the API liveness and the
   degraded readiness card with the backend correlation id
+- `apps/customer` on an Android emulator -> real sign-in against
+  `http://10.0.2.2:3000`, showing the account the API returned; `GET /auth/me`
+  with the issued token succeeds from the device
 
 ---
 
 ## IN_PROGRESS
 
 - PHASE 03 - Authentication: implementation, documentation, lint, typecheck,
-  497 unit/API tests and the Dart gate all pass. Two things keep the phase open:
-  - the CI `integration` job, the only place the four Prisma auth adapters and
-    the Redis limiter run against real infrastructure;
+  505 unit/API tests, the Dart gate and the integration suite against real
+  infrastructure all pass. What keeps the phase open:
   - `PasswordRecoveryNotifier` still has no real delivery channel. The adapter is
     named `Unavailable...` and refuses to pretend an email was sent, which is the
-    correct shape but not the finished feature
-- PHASE 02 - Database: schema, migration and seed are written; the
-  infrastructure-dependent half (applying `0001_init`, running the seed and the
-  database integration tests) is still unproven locally (see BLOCKED and
-  ADR-019)
-- PHASE 01 - Monorepo: only the Docker-backed verification of exit criteria 3
-  and 5 is outstanding (see BLOCKED)
+    correct shape but not the finished feature. Address verification depends on
+    the same channel;
+  - the CI `integration` job has never run on GitHub, so the compose-based proof
+    is still outstanding (see BLOCKED).
+- PHASE 02 - Database: `0001_init` applied, the seed proven idempotent and the
+  database integration specs green locally. The compose-based proof in CI is
+  still outstanding (ADR-019).
+- PHASE 01 - Monorepo: only the Docker-backed verification of exit criterion 3 is
+  outstanding (see BLOCKED).
+- Mobile: only `login` and `logout` exist end to end. Tokens are held in memory,
+  so a restart loses the session; there is no secure storage and no refresh on
+  expiry yet. `AuthApi.register` exists in the shared package but the customer
+  application has no registration screen yet.
 
 ---
 
 ## BLOCKED
 
-- PostgreSQL cannot run on the current development machine, so the
-  infrastructure-dependent exit criteria cannot be verified here. What was tried
-  on 2026-10-01:
-  - Docker, Docker Desktop and WSL are not installed, and the shell has no
-    elevation, so `docker compose` cannot be used;
-  - a portable PostgreSQL 16.10 (EnterpriseDB binaries, `initdb` + `pg_ctl`,
-    no elevation, no system change) installed and the postmaster started, but
-    every backend process dies with `0xC0000142` (`STATUS_DLL_INIT_FAILED`) as
-    soon as a client connects, so no session can be served. The extracted
-    binaries and data directory were removed afterwards.
-  Consequences:
-  - PHASE 01 exit criterion 3 (compose brings up both services with
-    healthchecks) is unverified locally;
-  - PHASE 01 exit criterion 5 second half (readiness with infrastructure) is
-    unverified locally - the degraded `503` path is verified by unit tests and
-    by running the API;
-  - PHASE 02: migration `0001_init` has never been applied, so it is written and
-    statically verified (Prisma schema engine, `prisma generate`, convention
-    tests) but **not** proven to apply, and the seed has never run against a real
-    database. No PHASE 02 exit criterion may be called verified until the CI
-    `integration` job is green.
-  - PHASE 03: the four Prisma auth adapters and the Redis rate limiter have never
-    executed against real infrastructure. 39 of the 42 integration tests **skip**
-    on this machine, which is reported as such rather than silently passed:
-    `node scripts/assert-integration-report.mjs` exits 1 naming every spec. The
-    auth behaviour itself *is* proven locally, because the e2e suite runs the real
-    Nest application over HTTP with in-memory ports; what is unproven is that the
-    Prisma adapters and the Lua script behave as written.
-  - Mitigation: the CI `integration` job runs `prisma migrate deploy`,
-    `prisma migrate status`, the seed twice with a snapshot comparison, the
-    integration suite followed by the skip assertion, and the readiness probe
-    against real PostgreSQL and Redis service containers, and validates both
-    compose files. Until that job passes, PHASE 02 and PHASE 03 stay IN_PROGRESS.
+- **Nothing is blocked for the current scope.** PostgreSQL and Redis now run
+  locally, so the infrastructure-dependent criteria were verified here instead of
+  waiting for CI. What changed, and what is still not proven:
+
+### Local PostgreSQL and Redis (unblocking detail)
+
+Docker, Docker Desktop and WSL are still unavailable, and the documented
+infrastructure is still `infrastructure/docker/docker-compose.*`. To unblock
+verification on this host, PostgreSQL 16.14 and Redis 7 were installed **outside
+the repository**, in the temporary scratch directory, as development tools only:
+
+- `embedded-postgres` starts a PostgreSQL 16 cluster on `127.0.0.1:5432`. The
+  version matches the `postgres:16` image the compose files use; a different major
+  version could make a migration pass locally and fail in CI.
+- `redis-memory-server` starts a real Redis on `127.0.0.1:6379`.
+
+Nothing was added to the repository for this, and the compose files remain the
+documented infrastructure. The only lesson worth keeping is operational: on
+Windows, killing a `postmaster` with `Stop-Process` leaves its backend children
+alive holding the shared memory block, and every later start fails with
+`0xC0000142` (`STATUS_DLL_INIT_FAILED`). `taskkill /F /T /PID` kills the tree and
+the symptom disappears. The earlier diagnosis blamed DLLs and OneDrive; it was
+the orphaned children.
+
+### Verified against that local infrastructure
+
+- `prisma migrate deploy` applies `0001_init` cleanly to both `deliveryuy` and
+  `deliveryuy_test`, and `prisma migrate status` reports the schema up to date.
+  This closes the PHASE 02 apply-migration criterion.
+- The seed runs twice: 4 users on the first run, 0 on the second, with
+  `assert-seeded-users.mjs` green both times.
+- The integration suite reports **42 executed, 0 skipped, 5 files**, and
+  `scripts/assert-integration-report.mjs` exits 0. The four Prisma auth adapters
+  and the `RedisRateLimiter` are therefore proven against real PostgreSQL and
+  real Redis.
+- The API was run and exercised over HTTP: `/health/live`, `/health/ready`
+  (`200`, `database` and `redis` up), `POST /auth/login` (`200`, JWT access
+  token, opaque `rt_…` refresh token, `expiresIn 899`, roles `['CUSTOMER']`),
+  `POST /auth/register`, `POST /auth/refresh` (rotated token), `GET /auth/me`,
+  and a wrong password returning `401` with the error envelope.
+
+### Still unproven
+
+- **Docker Compose itself.** The `integration` job remains the only place
+  `docker compose` bringing up both services with healthchecks is exercised, so
+  PHASE 01 exit criterion 3 stays unverified locally. Reaching equivalent
+  endpoints by other means proves the code, not the compose file.
+- **`HEALTH_CHECK_TIMEOUT_MS`.** The default of 2000 ms has almost no margin on
+  this host: a cold Prisma connection takes about 2.3 s, so the readiness probe
+  consumed its entire budget. The local `.env` raises it to 5000 ms. The default
+  was **not** changed, because raising it globally would hide a real regression
+  behind a longer wait; this is a note for whoever tunes it per deployment.
 
 ---
 
 ## NEXT
 
-1. PHASE 02 / PHASE 03 - run the CI `integration` job so `0001_init`, the seed,
-   the four Prisma auth adapters and the Redis limiter are proven against real
-   PostgreSQL and Redis, then close both phases
-2. PHASE 03 - implement a notification provider behind
+1. Mobile - secure storage for the token pair, plus a refresh on expiry, so a
+   restart does not lose the session and a 15-minute access token does not end a
+   session mid-order
+2. Mobile - registration screen on top of the existing `AuthApi.register`, and the
+   pending-verification path the shared package already models
+3. PHASE 03 - implement a notification provider behind
    `PasswordRecoveryNotifier` so password recovery and address verification can
    actually deliver a message, and document the seeded bootstrap credentials
-3. PHASE 04 - Users and roles: per-role permissions and guards on real endpoints,
+4. PHASE 03 / PHASE 01 - run the CI `integration` job so the compose files, not
+   just reachable endpoints, are proven
+5. PHASE 04 - Users and roles: per-role permissions and guards on real endpoints,
    starting from the matrix `packages/auth` already owns
-4. Implement provider adapters behind the existing interfaces (map, payment,
+6. Implement provider adapters behind the existing interfaces (map, payment,
    storage) instead of extending the "not configured" guards
-5. Promote the admin HTTP client to `packages/` only when a second web client
+7. Promote the admin HTTP client to `packages/` only when a second web client
    needs it (ADR-018)
 
 ---
@@ -312,7 +362,9 @@ Documentation updated: `ADR-020`, `SECURITY.md`, `docs/API_RULES.md`,
   (`UnavailablePasswordRecoveryNotifier`); the token is generated, stored and
   single-use, but nothing sends it. A deployment that leaves it there has
   password recovery that only works by reading the database
-- Docker unavailable in the current environment (see BLOCKED)
+- Docker unavailable in the current environment. PostgreSQL and Redis were run
+  locally outside the repository to unblock verification, which proves the code
+  but not the compose files (see BLOCKED)
 - `@nestjs/cli` pulls `@swc/core` as an optional peer; it is explicitly denied in
   `pnpm-workspace.yaml` because the project compiles with `tsc -b` (ADR-017)
 - `@node-rs/argon2` needs a prebuilt binary for the target platform. None is
