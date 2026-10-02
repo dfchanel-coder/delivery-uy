@@ -71,6 +71,32 @@ describe('loadConfig', () => {
     );
   });
 
+  it('refuses to require email verification while no provider can deliver it', () => {
+    // Verification is a promise the deployment has to be able to keep: with no
+    // notification provider nobody would ever receive the message, and every
+    // account would stay unusable.
+    expect(() =>
+      loadConfig(baseEnv({ REQUIRE_EMAIL_VERIFICATION: 'true', NOTIFICATION_PROVIDER: 'none' })),
+    ).toThrow(/REQUIRE_EMAIL_VERIFICATION/);
+  });
+
+  it('refuses an elevated self-registration role', () => {
+    // Self-registration must not be able to hand out a role that grants
+    // administrative or operational permissions (AGENTS.md section 32).
+    expect(() => loadConfig(baseEnv({ REGISTER_DEFAULT_ROLE: 'ADMIN' }))).toThrow(
+      /REGISTER_DEFAULT_ROLE/,
+    );
+    expect(() => loadConfig(baseEnv({ REGISTER_DEFAULT_ROLE: 'MERCHANT' }))).toThrow(
+      /REGISTER_DEFAULT_ROLE/,
+    );
+  });
+
+  it('rejects an unknown rate limit backend', () => {
+    expect(() => loadConfig(baseEnv({ RATE_LIMIT_BACKEND: 'memcached' }))).toThrow(
+      /RATE_LIMIT_BACKEND/,
+    );
+  });
+
   it('collects every problem in a single error', () => {
     const env = baseEnv({ API_PORT: 'not-a-port', LOGIN_MAX_ATTEMPTS: '0' });
     const error = (() => {
@@ -186,6 +212,11 @@ describe('toAppConfig', () => {
       PASSWORD_ARGON2_MEMORY_KIB: 65536,
       PASSWORD_ARGON2_ITERATIONS: 3,
       PASSWORD_MIN_LENGTH: 10,
+      REQUIRE_EMAIL_VERIFICATION: false,
+      REGISTER_DEFAULT_ROLE: 'CUSTOMER',
+      PASSWORD_RESET_TTL_HOURS: 2,
+      TRUST_PROXY_HOPS: 0,
+      RATE_LIMIT_BACKEND: 'redis',
       DELIVERY_CODE_LENGTH: 6,
       DELIVERY_CODE_NUMERIC_ONLY: true,
       DELIVERY_CODE_TTL_HOURS: 24,

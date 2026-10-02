@@ -72,6 +72,19 @@ export const environmentSchema = z
     PASSWORD_ARGON2_MEMORY_KIB: z.coerce.number().int().min(8192).max(1048576).default(65536),
     PASSWORD_ARGON2_ITERATIONS: z.coerce.number().int().min(1).max(20).default(3),
     PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).max(128).default(10),
+    REQUIRE_EMAIL_VERIFICATION: booleanish(false),
+    REGISTER_DEFAULT_ROLE: z.enum(['CUSTOMER']).default('CUSTOMER'),
+    PASSWORD_RESET_TTL_HOURS: z.coerce.number().int().min(1).max(168).default(2),
+    /**
+     * Number of reverse proxies in front of the API.
+     *
+     * `0` (the default) means `X-Forwarded-For` is ignored, which is the safe
+     * setting: trusting the header blindly lets any client forge the address
+     * that rate limits and audit records attribute a request to.
+     */
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+    /** Shared (redis) or per-process (memory) rate limit counters. */
+    RATE_LIMIT_BACKEND: z.enum(['redis', 'memory']).default('redis'),
 
     // --- delivery code (ADR-010) ---------------------------------------
     DELIVERY_CODE_LENGTH: z.coerce.number().int().min(4).max(6).default(6),
@@ -186,6 +199,18 @@ export const environmentSchema = z
         message: 'a payment provider must be configured before production launch',
       });
     }
+
+    // Requiring verification without a delivery channel would lock every new
+    // account out with no way to recover. Refused at startup instead of
+    // discovered by the first customer.
+    if (value.REQUIRE_EMAIL_VERIFICATION && value.NOTIFICATION_PROVIDER === 'none') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['NOTIFICATION_PROVIDER'],
+        message:
+          'must not be "none" while REQUIRE_EMAIL_VERIFICATION is enabled: accounts would never receive the verification or recovery message',
+      });
+    }
   });
 
 export type RawEnvironment = z.infer<typeof environmentSchema>;
@@ -219,6 +244,19 @@ export interface AppConfig {
     readonly passwordArgon2MemoryKib: number;
     readonly passwordArgon2Iterations: number;
     readonly passwordMinLength: number;
+    /** Whether registration must wait for email verification before login. */
+    readonly requireEmailVerification: boolean;
+    /** Role given to a self-registered account. Merchant and driver apply later. */
+    readonly registerDefaultRole: 'CUSTOMER';
+    readonly passwordResetTtlHours: number;
+    readonly trustProxyHops: number;
+  };
+  readonly rateLimit: {
+    /**
+     * `redis` shares counters across instances; `memory` keeps them per
+     * process, which is only correct for a single instance.
+     */
+    readonly backend: 'redis' | 'memory';
   };
   readonly deliveryCode: {
     readonly length: number;
@@ -318,7 +356,12 @@ export function toAppConfig(env: RawEnvironment): AppConfig {
       passwordArgon2MemoryKib: env.PASSWORD_ARGON2_MEMORY_KIB,
       passwordArgon2Iterations: env.PASSWORD_ARGON2_ITERATIONS,
       passwordMinLength: env.PASSWORD_MIN_LENGTH,
+      requireEmailVerification: env.REQUIRE_EMAIL_VERIFICATION,
+      registerDefaultRole: env.REGISTER_DEFAULT_ROLE,
+      passwordResetTtlHours: env.PASSWORD_RESET_TTL_HOURS,
+      trustProxyHops: env.TRUST_PROXY_HOPS,
     }),
+    rateLimit: Object.freeze({ backend: env.RATE_LIMIT_BACKEND }),
     deliveryCode: Object.freeze({
       length: env.DELIVERY_CODE_LENGTH,
       numericOnly: env.DELIVERY_CODE_NUMERIC_ONLY,
