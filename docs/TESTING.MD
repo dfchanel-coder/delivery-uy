@@ -128,7 +128,9 @@ pnpm run infra:verify
 Three things this script does not settle, and which stay open until the CI job runs:
 
 - the compose files bringing those servers up (no container runtime needed by the
-  script, only reachable endpoints);
+  script, only reachable endpoints). This one the CI `compose` job does cover:
+  it runs both files with `up --wait`, so the criterion is decided by containers
+  reporting healthy rather than by a YAML parse. See "What CI proves" below;
 - the health budget. Step 6 prints `HEALTH_CHECK_TIMEOUT_MS`, because the probe
   opens its own client and a host where connecting is slow needs a larger budget
   than the default. See `HEALTH_CHECK_TIMEOUT_MS` in `.env.example`. **Observed on
@@ -320,17 +322,61 @@ and the integration suite is the layer that CI exists to run (ADR-019).
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` defines three jobs:
+`.github/workflows/ci.yml` defines four jobs:
 
-| Job          | What it proves                                                        |
-| ------------ | --------------------------------------------------------------------- |
-| `verify`     | Prisma schema validation, lint, typecheck, builds, unit/API tests and formatting |
-| `flutter`    | `flutter analyze` and `flutter test` in every Dart workspace           |
-| `integration` | `prisma migrate deploy` + `migrate status`, the seed run twice with a snapshot comparison, the development-user seed check, `*.integration.spec.ts` with the skip assertion, the readiness probe against real PostgreSQL/Redis, and compose validation |
+| Job           | What it proves                                                        |
+| ------------- | --------------------------------------------------------------------- |
+| `verify`      | Prisma schema validation, lint, typecheck, builds, unit/API tests and formatting |
+| `flutter`     | `flutter analyze` and `flutter test` in every Dart workspace           |
+| `compose`     | both compose files boot and every service reports healthy, then the whole verification script runs against the development stack |
+| `integration` | `prisma migrate deploy` + `migrate status`, the seed run twice with a snapshot comparison, the development-user seed check, `*.integration.spec.ts` with the skip assertion, and the readiness probe against real PostgreSQL/Redis |
 
 The `integration` job exists because neither the readiness endpoint, a migration,
 a Prisma adapter nor the Redis limiter can be proven without real dependencies;
 local runs without Docker are not a substitute (ADR-019).
+
+### What CI proves
+
+The `compose` job is the answer to a question that was previously answered
+wrongly. PHASE 01 exit criterion 3 says the images start and become healthy, and
+until this job existed the workflow only ever ran `docker compose config
+--quiet`, which parses a document without starting a container, while the
+`integration` job took its servers from a `services:` block declared in the
+workflow rather than from these files. The documented infrastructure had never
+actually been run anywhere.
+
+Two jobs rather than one, because they prove different things and both are worth
+proving: `compose` runs **our** compose files, and `integration` runs the
+application against service containers on the ports its `DATABASE_URL` names.
+
+What `compose` does, in order:
+
+1. `config --quiet` on both files, so an unparseable file fails before anything
+   is created;
+2. the test stack first with `up -d --wait`, because it is the smaller of the two
+   and a file that cannot boot should say so in under a minute rather than after
+   the whole verification;
+3. the development stack with `up -d --wait`;
+4. `node scripts/verify-infrastructure.mjs --from 1`, the same script a developer
+   runs locally, pointed at the containers instead. This is what turns "the image
+   started" into "the stack works": migrations, the seed, the integration suite
+   and both health probes all travel through the published ports;
+5. `down -v` for each stack under `if: always()`, so a failed verification does
+   not leave containers holding ports the runner is about to be torn down with.
+
+`--wait` is the whole of criterion 3, and it is why the timeout is 180 s: a
+container that reports healthy late is still healthy, and a container that never
+does should fail the step rather than be waited on indefinitely. The health
+budget is separate and is raised to `HEALTH_CHECK_TIMEOUT_MS=15000` for this job,
+because a runner's first connection to a container it has just started is colder
+than the default 2000 ms assumes - see the observation above.
+
+Nine contracts in `test/infrastructure/ci-workflow.spec.ts` hold this job to that
+description, including that the URLs it uses name the ports the compose file
+actually publishes (read out of the file rather than restated) and that every
+start carries `--wait`. Two of them were proven load-bearing by mutating the
+workflow: dropping `--wait`, and changing the compose file's published port,
+each failed exactly the contract meant to catch it.
 
 The seed is verified by running it twice and comparing the second run against a
 snapshot of the first (`packages/database/scripts/assert-seeded-users.mjs`). A

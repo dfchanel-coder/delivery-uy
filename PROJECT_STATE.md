@@ -391,8 +391,9 @@ Run against a local sink outside the repository (not a committed fixture), with
   `scripts/verify-infrastructure.mjs`. The compose-based proof in CI is still
   outstanding (ADR-019).
 - PHASE 01 - Monorepo: exit criterion 5 is now verified against real
-  infrastructure. Only the Docker-backed verification of exit criterion 3 is
-  outstanding (see BLOCKED).
+  infrastructure. Exit criterion 3 is now closable by CI, but was not before this
+  session: the workflow never started the compose files, so a CI run would not
+  have decided it. The `compose` job does (see BLOCKED).
 - Mobile: `login`, `register`, `logout`, `verify-email` and secure session
   persistence exist end to end and are proven on the emulator (ADR-021).
   `apps/merchant` and `apps/driver` still hold their sessions in memory only, and
@@ -412,12 +413,33 @@ Run against a local sink outside the repository (not a committed fixture), with
   locally, so the infrastructure-dependent criteria were verified here instead of
   waiting for CI. What changed, and what is still not proven:
 
+### The container runtime, and the job that no longer needs it
+
+Docker, Docker Desktop, WSL and Podman are all unavailable on this host, and this
+session is not an administrator, so no container runtime can be installed here -
+WSL needs elevation and a reboot. That is unchanged and is why the compose files
+have never booted on this machine.
+
+What changed is that the gap is now closable by CI alone, and closes for real.
+The workflow previously had **no job that started the compose files**: it ran
+`docker compose config --quiet`, which parses a document without starting a
+container, and took the `integration` job's two servers from a `services:` block
+declared in the workflow rather than from these files. So PHASE 01 criterion 3
+would have been reported as "pending CI" after a CI run that did not touch it.
+
+A `compose` job now runs both files with `up -d --wait`, which fails unless every
+service reports healthy, and then points the whole verification script at the
+development stack so the ports those containers publish are exercised for real.
+Nine contracts hold it to that, and PHASE 01 criterion 3 becomes provable by
+pushing a branch. See `docs/TESTING.MD` "What CI proves".
+
+Still true: nothing here proves it yet. The job has never run.
+
 ### Local PostgreSQL and Redis (unblocking detail)
 
-Docker, Docker Desktop and WSL are still unavailable, and the documented
-infrastructure is still `infrastructure/docker/docker-compose.*`. To unblock
-verification on this host, PostgreSQL 16.14 and Redis 7 were installed **outside
-the repository**, in the temporary scratch directory, as development tools only:
+To unblock verification on this host, PostgreSQL 16.14 and Redis 7 were installed
+**outside the repository**, in the temporary scratch directory, as development
+tools only:
 
 - `embedded-postgres` starts a PostgreSQL 16 cluster on `127.0.0.1:5432`. The
   version matches the `postgres:16` image the compose files use; a different major
@@ -568,8 +590,11 @@ a wrong password returning `401` with the error envelope.
 
 ## NEXT
 
-1. PHASE 03 / PHASE 01 - run the CI `integration` job so the compose files, not
-   just reachable endpoints, are proven. It has never run: no remote is configured
+1. PHASE 03 / PHASE 01 / PHASE 02 - create the GitHub remote and push, so the
+   `compose` and `integration` jobs run for the first time. They have never run:
+   no remote is configured and `gh` is not installed, so this needs the
+   repository owner. When they do, `compose` closes PHASE 01 criterion 3 and
+   `integration` the compose-based proof for PHASE 01 and PHASE 02
 2. PHASE 04 - build the first surface that uses the mechanism now that the guards
    are proven: `AdminModule` with endpoints behind the `admin:*` permissions that
    today hang from nothing, plus `SUPER_ADMIN`, `SUPPORT` and `FINANCE` in the

@@ -92,10 +92,16 @@ interface PackageManifest {
 const manifest = readRepositoryYaml<PackageManifest>('package.json');
 
 describe('workflow structure', () => {
-  it('parses with the three jobs the phases depend on', () => {
-    // `verify` is the ordinary gate, `flutter` covers the mobile workspaces and
-    // `integration` is the only place the compose-based criteria can be proven.
-    expect(Object.keys(workflow.jobs).sort()).toEqual(['flutter', 'integration', 'verify']);
+  it('parses with the four jobs the phases depend on', () => {
+    // `verify` is the ordinary gate, `flutter` covers the mobile workspaces,
+    // `compose` is the only place the compose files are actually started, and
+    // `integration` covers the API against service containers.
+    expect(Object.keys(workflow.jobs).sort()).toEqual([
+      'compose',
+      'flutter',
+      'integration',
+      'verify',
+    ]);
   });
 
   it('bounds every job in time', () => {
@@ -396,14 +402,6 @@ describe('the integration job', () => {
     }
   });
 
-  it('validates the compose definitions it cannot start', () => {
-    // On the runner, `docker compose config` is available even though the job
-    // never brings the stack up, so the files are at least parsed.
-    const validates = steps.some(({ step }) => (step.run ?? '').includes('docker compose'));
-
-    expect(validates).toBe(true);
-  });
-
   it('asserts the integration suite executed rather than skipped', () => {
     // Every spec skips itself when its dependency is missing, so a green run
     // alone proves nothing. Without this assertion the job could pass having
@@ -443,5 +441,157 @@ describe('the integration job', () => {
     const text = readRepositoryFile(WORKFLOW);
 
     expect(text).not.toContain('${{ secrets.');
+  });
+});
+
+/**
+ * The compose job is the only place PHASE 01 exit criterion 3 is proven.
+ *
+ * Until it existed, nothing started these files anywhere: `docker compose
+ * config --quiet` parses a document, and the `integration` job takes its servers
+ * from a `services:` block in the workflow instead. A criterion that reads
+ * "the images start and become healthy" and is decided by a YAML parse is not
+ * met, and the way it fails is quiet - it looks met.
+ *
+ * So the contracts below are mostly about the job still doing what it was added
+ * for. Each of them fails if someone reduces the boot back to a validation.
+ */
+describe('the compose job', () => {
+  const job = workflow.jobs['compose'];
+  const jobSteps = job?.steps ?? [];
+  const runs = jobSteps.map((step) => step.run ?? '');
+
+  interface ComposeFile {
+    readonly services?: Readonly<Record<string, { readonly ports?: readonly (string | number)[] }>>;
+  }
+
+  /**
+   * The host port a compose service publishes, taken from the file rather than
+   * restated. Reading it out of the interpolation means a port renamed in the
+   * compose file moves this expectation with it, instead of leaving a hardcoded
+   * number here to drift against the thing it describes.
+   *
+   * Both spellings are handled because the file uses both: `'${POSTGRES_PORT:-5432}:5432'`
+   * and a bare `'5432:5432'`. Splitting on `:` does not work for the first, since
+   * the interpolation itself contains a colon.
+   */
+  function publishedPort(service: string): number {
+    const compose = readRepositoryYaml<ComposeFile>('infrastructure/docker/docker-compose.dev.yml');
+    const mapping = compose.services?.[service]?.ports?.[0];
+
+    if (typeof mapping !== 'string') {
+      throw new Error(`the development compose file publishes no port for ${service}`);
+    }
+
+    const interpolated = /:-(\d+)\}/.exec(mapping)?.[1];
+    const plain = /^(\d+):/.exec(mapping)?.[1];
+
+    return Number(interpolated ?? plain);
+  }
+
+  it('exists as a job of its own', () => {
+    // Not a step inside `integration`. Criterion 3 is a separate criterion, and
+    // folding it into another job would mean a red run for two unrelated reasons.
+    expect(job).toBeDefined();
+    expect(job?.['runs-on']).toBeTruthy();
+    expect(job?.['timeout-minutes']).toBeGreaterThan(0);
+  });
+
+  it('starts every compose file rather than only parsing it', () => {
+    // The assertion the whole job exists for. `config --quiet` was the previous
+    // state of this repository: a green check that proved a file parses.
+    const started = runs.filter((run) => /docker compose\b.*\bup\b/.test(run));
+
+    expect(started.length).toBeGreaterThanOrEqual(2);
+
+    for (const composeFile of ['docker-compose.dev.yml', 'docker-compose.test.yml']) {
+      expect(
+        started.some((run) => run.includes(composeFile)),
+        `nothing starts ${composeFile}`,
+      ).toBe(true);
+    }
+  });
+
+  it('waits for health on every start instead of racing a booting server', () => {
+    // `up -d` without `--wait` returns as soon as the container exists, so the
+    // next step talks to a server that has not finished starting - which shows up
+    // as a flaky connection error in whatever ran next, not as a health problem.
+    //
+    // Matched with a boundary rather than a substring, because `--wait-timeout`
+    // contains `--wait`: a plain `toContain` here is satisfied by the timeout
+    // option alone and would pass on exactly the command it exists to reject.
+    for (const run of runs.filter((candidate) => /docker compose\b.*\bup\b/.test(candidate))) {
+      expect(run, `an up without --wait: ${run.trim()}`).toMatch(/(?:^|\s)--wait(?:\s|$)/m);
+    }
+  });
+
+  it('validates both definitions before starting anything', () => {
+    const validateIndex = runs.findIndex((run) => run.includes('config --quiet'));
+    const firstUpIndex = runs.findIndex((run) => /docker compose\b.*\bup\b/.test(run));
+
+    expect(validateIndex).toBeGreaterThanOrEqual(0);
+    expect(firstUpIndex).toBeGreaterThan(validateIndex);
+
+    expect(runs[validateIndex]).toContain('docker-compose.dev.yml');
+    expect(runs[validateIndex]).toContain('docker-compose.test.yml');
+  });
+
+  it('stops every stack it starts, including after a failure', () => {
+    // Without `if: always()` a failed verification leaves containers holding
+    // their published ports, and the runner is torn down before anyone reads
+    // which of them was at fault.
+    const downs = jobSteps.filter((step) => /docker compose\b.*\bdown\b/.test(step.run ?? ''));
+
+    expect(downs.length).toBeGreaterThanOrEqual(2);
+
+    for (const step of downs) {
+      // GitHub spells this `always()`, and a YAML parser hands the expression
+      // back verbatim, so both spellings have to be accepted here rather than
+      // asserting the one this file happens to use.
+      expect(step.if, `a teardown that skips on failure: ${step.name ?? step.run}`).toMatch(
+        /^always\b/,
+      );
+    }
+  });
+
+  it('proves the application works against the stack, not only that it started', () => {
+    // `--wait` proves the containers report healthy. It does not prove the
+    // application can use them, which is the half that fails for real: a port
+    // published to the wrong interface, a database name the seed does not match,
+    // a volume that swallows the data directory.
+    const shared = runs.some((run) => run.includes('verify-infrastructure.mjs'));
+
+    expect(shared).toBe(true);
+  });
+
+  it('points at the ports the development compose file publishes', () => {
+    // The failure this prevents is a slow one to read: `DATABASE_URL` naming a
+    // port nothing listens on, and a log full of connection refused that reads
+    // like a broken image rather than a stale number in this file.
+    const env = job?.env ?? {};
+
+    expect(env['DATABASE_URL']).toContain(`:${publishedPort('postgres')}/`);
+    expect(env['REDIS_URL']).toContain(`:${publishedPort('redis')}`);
+  });
+
+  it('leaves the published ports to the compose file', () => {
+    // Setting `POSTGRES_PORT` here would publish the container somewhere the
+    // `DATABASE_URL` above does not name, and the correspondence asserted above
+    // would become a coincidence rather than a fact.
+    const env = job?.env ?? {};
+
+    expect(env).not.toHaveProperty('POSTGRES_PORT');
+    expect(env).not.toHaveProperty('REDIS_PORT');
+  });
+
+  it('gives the health probe a budget a just-started container can meet', () => {
+    // The default is 2000 ms per dependency, and a healthy PostgreSQL has been
+    // observed to answer the first probe in 2187 ms on a slow host. On a runner
+    // the first connection is colder still, and paying a red job for the budget
+    // would waste the only run this repository gets.
+    const budget = (job?.env ?? {})['HEALTH_CHECK_TIMEOUT_MS'];
+
+    expect(budget, 'the compose job leaves the health budget at its default').toBeDefined();
+    expect(Number(budget)).toBeGreaterThan(2000);
   });
 });

@@ -69,6 +69,30 @@ state including the degraded readiness path.
 
 Remaining exit criterion:
 
+### Criterion 3, and the job that was missing to decide it
+
+"The images start and become healthy" was, until this session, not closable by
+anything. The workflow ran `docker compose config --quiet`, which parses a
+document without starting a container, and the `integration` job took its two
+servers from a `services:` block declared inside the workflow rather than from
+`infrastructure/docker/docker-compose.*`. So the documented infrastructure was
+never actually run, on a runner or anywhere else, and a green CI run would have
+left this criterion open while looking like it had closed it.
+
+A fourth job, `compose`, now decides it: both files are started with
+`up -d --wait`, which fails unless every service reports healthy, and the
+development stack then carries the whole verification script so the ports those
+containers publish are exercised for real rather than assumed. Nine contracts in
+`test/infrastructure/ci-workflow.spec.ts` hold it to that description, and two of
+them were proven load-bearing by mutating the workflow: dropping `--wait`, and
+changing the published port in the compose file, each failed exactly the contract
+meant to catch it. See `docs/TESTING.MD` "What CI proves".
+
+Still unproven, because the job has never run: no container runtime is available
+on this host (not an administrator, no WSL, no Docker, no Podman) and the
+repository has no remote. What changed is that pushing a branch is now sufficient
+to decide it.
+
 3. `docker compose -f infrastructure/docker/docker-compose.dev.yml up -d`
    provides PostgreSQL and Redis with healthchecks.
 

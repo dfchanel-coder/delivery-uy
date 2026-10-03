@@ -85,13 +85,108 @@ jobs:
       - name: Dart quality gate
         run: node scripts/flutter-check.mjs
 
+  compose:
+    name: Compose stacks boot and become healthy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # PHASE 01 exit criterion 3 says the images start and become healthy, and
+    # until this job existed nothing proved it anywhere. `docker compose config
+    # --quiet` parses a file without starting a single container, and the
+    # `integration` job below takes its two servers from a `services:` block
+    # declared in this workflow rather than from these files. The documented
+    # infrastructure had never actually been run.
+    #
+    # Both files are started here, and `--wait` blocks until every service
+    # reports healthy, failing the step otherwise. That is criterion 3 on its
+    # own. The development stack then carries the whole verification script, so
+    # what gets proven is not only that the containers came up but that the
+    # application works against them, through the ports they publish.
+    env:
+      DATABASE_URL: postgresql://delivery:delivery@localhost:5432/deliveryuy
+      REDIS_URL: redis://localhost:6379
+      JWT_ACCESS_SECRET: ci-access-secret-0123456789abcdef0123456789
+      JWT_REFRESH_SECRET: ci-refresh-secret-0123456789abcdef0123456789
+      APP_ENV: test
+      NODE_ENV: test
+      API_PORT: '3000'
+      LOG_LEVEL: info
+      CI: 'true'
+      # A runner is a shared machine whose first connection to a container it has
+      # just started is not fast. The default 2000 ms per dependency is a budget
+      # a healthy PostgreSQL has been observed to exceed (2187 ms), and paying a
+      # red job for a slow first connection would waste the one run this
+      # repository gets.
+      HEALTH_CHECK_TIMEOUT_MS: '15000'
+      SEED_ADMIN_EMAIL: admin@ci.deliveryuy.local
+      SEED_ADMIN_PASSWORD: ci-only-admin-password-0123456789
+      SEED_MERCHANT_EMAIL: merchant@ci.deliveryuy.local
+      SEED_MERCHANT_PASSWORD: ci-only-merchant-password-0123456789
+      SEED_DRIVER_EMAIL: driver@ci.deliveryuy.local
+      SEED_DRIVER_PASSWORD: ci-only-driver-password-0123456789
+      SEED_CUSTOMER_EMAIL: customer@ci.deliveryuy.local
+      SEED_CUSTOMER_PASSWORD: ci-only-customer-password-0123456789
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Enable Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build backend
+        run: pnpm run build
+
+      # Validated here rather than in the job that used to do it, because this is
+      # the job that starts them. A file that cannot even be parsed should fail
+      # before anything is created.
+      - name: Validate compose definitions
+        run: |
+          docker compose -f infrastructure/docker/docker-compose.dev.yml config --quiet
+          docker compose -f infrastructure/docker/docker-compose.test.yml config --quiet
+
+      # The test stack first. It is the smaller of the two, so a file that cannot
+      # boot says so in under a minute instead of after the whole verification.
+      - name: Start the test stack and wait for health
+        run: docker compose -f infrastructure/docker/docker-compose.test.yml up -d --wait --wait-timeout 180
+
+      - name: Stop the test stack
+        if: always()
+        run: docker compose -f infrastructure/docker/docker-compose.test.yml down -v
+
+      - name: Start the development stack and wait for health
+        run: docker compose -f infrastructure/docker/docker-compose.dev.yml up -d --wait --wait-timeout 180
+
+      # The same script a developer runs against local endpoints, pointed at the
+      # containers instead. This is what turns "the image started" into "the
+      # stack works": migrations, the seed, the integration suite and both health
+      # probes all travel through the published ports. It is also the only place
+      # the Redis rate limiter has ever run against a real `redis:7`.
+      - name: Verify the application against the development stack
+        run: node scripts/verify-infrastructure.mjs --from 1
+
+      - name: Stop the development stack
+        if: always()
+        run: docker compose -f infrastructure/docker/docker-compose.dev.yml down -v
+
   integration:
     name: Infrastructure smoke test
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    # This job exists because PHASE 01 exit criteria 3 and 5 can only be proven
-    # against real PostgreSQL and Redis containers.
+    # PHASE 01 exit criterion 5: the API, its migrations, its seed and the
+    # integration suite against real PostgreSQL and Redis. Criterion 3, the
+    # compose files booting, is the `compose` job above - these are service
+    # containers declared here rather than our own compose files, which is the
+    # reason both jobs exist.
     services:
       postgres:
         image: postgres:16-alpine
@@ -133,11 +228,6 @@ jobs:
 
       - name: Build backend
         run: pnpm run build
-
-      - name: Validate compose definitions
-        run: |
-          docker compose -f infrastructure/docker/docker-compose.dev.yml config --quiet
-          docker compose -f infrastructure/docker/docker-compose.test.yml config --quiet
 
       # Everything below is one script on purpose. It is the same script a
       # developer runs against local endpoints, so "green on CI" and "green here"
