@@ -19,6 +19,10 @@
     "clean": "tsc -b --clean"
   },
   "devDependencies": {
-    "@deliveryuy/typescript-config": "workspace:*"
+    "@deliveryuy/typescript-config": "workspace:*",
+    "@types/nodemailer": "^8.0.2"
+  },
+  "dependencies": {
+    "nodemailer": "^10.0.13"
   }
 }

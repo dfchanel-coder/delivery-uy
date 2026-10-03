@@ -29,6 +29,7 @@ accepted decision requires a new ADR that explicitly supersedes it
 | [019](ADR-019-migration-verification.md) | Verifying Database Migrations without a Local Database | ACCEPTED |
 | [020](ADR-020-cryptography-libraries.md) | Cryptography Libraries for Password Hashing and Access Tokens | ACCEPTED |
 | [021](ADR-021-mobile-credential-persistence.md) | Credential Persistence in the Mobile Applications | ACCEPTED |
+| [022](ADR-022-notification-delivery.md) | Delivering Password Recovery and Address Verification | ACCEPTED |
 
 ## Naming
 

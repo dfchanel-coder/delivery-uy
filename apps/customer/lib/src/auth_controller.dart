@@ -63,6 +63,7 @@ class AuthController extends ChangeNotifier {
   AuthStatus _status = AuthStatus.signedOut;
   AuthSession? _session;
   String? _pendingVerificationEmail;
+  bool _pendingVerificationConfirmed = false;
   bool _restoring = false;
   AuthFailureKind? _failureKind;
   String? _failureCode;
@@ -85,6 +86,14 @@ class AuthController extends ChangeNotifier {
 
   /// Address of the account waiting for verification, when that is the state.
   String? get pendingVerificationEmail => _pendingVerificationEmail;
+
+  /// Whether the waiting account has proven its address but is still not usable.
+  ///
+  /// A deployment may require approval after the address is confirmed. Reporting
+  /// only "verified" would leave the person on a screen implying they can sign in,
+  /// so the second fact is carried separately and the interface can say what is
+  /// actually true (AGENTS.md section 5).
+  bool get pendingVerificationConfirmed => _pendingVerificationConfirmed;
 
   /// Why the last attempt failed, or null when it succeeded.
   AuthFailureKind? get failureKind => _failureKind;
@@ -161,6 +170,7 @@ class AuthController extends ChangeNotifier {
 
       if (session == null) {
         _pendingVerificationEmail = registration.user.email;
+        _pendingVerificationConfirmed = false;
         _status = AuthStatus.awaitingVerification;
         notifyListeners();
         return;
@@ -256,6 +266,7 @@ class AuthController extends ChangeNotifier {
 
     _session = null;
     _pendingVerificationEmail = null;
+    _pendingVerificationConfirmed = false;
     _status = AuthStatus.signedOut;
     _clearFailure();
     notifyListeners();
@@ -307,13 +318,69 @@ class AuthController extends ChangeNotifier {
     return (await _attemptAccount()).account;
   }
 
-  /// Returns to the sign-in form from the "account created" screen.
+  /// Proves the waiting account's address with the code from the message.
+  ///
+  /// The code is sent to the API and never kept here, not even for a retry: a
+  /// controller field holding a bearer credential is one more copy to leak
+  /// (SECURITY.md).
+  ///
+  /// Two answers are possible and both are reported honestly. A deployment that
+  /// activates the account on proof moves to the sign-in form. One that also
+  /// requires approval stays in this state with
+  /// [pendingVerificationConfirmed] set, because presenting a sign-in form that
+  /// the API will refuse with `EMAIL_NOT_VERIFIED` would be a dead end.
+  Future<void> confirmEmail(String token) async {
+    if (_status == AuthStatus.submitting) {
+      return;
+    }
+
+    final String code = token.trim();
+
+    // Only a presence check. The shape of the code is the API's business, and a
+    // client-side length rule would refuse a valid one the moment the format
+    // changes (AGENTS.md section 52).
+    if (code.isEmpty) {
+      return;
+    }
+
+    // Remembered because a refused code returns to this screen rather than to the
+    // sign-in form, and `_begin` has just moved the state elsewhere.
+    final AuthStatus previous = _status;
+    _begin();
+
+    try {
+      final EmailConfirmation confirmation = await authApi.verifyEmail(code);
+
+      if (confirmation.canSignIn) {
+        _pendingVerificationEmail = null;
+        _pendingVerificationConfirmed = false;
+        _status = AuthStatus.signedOut;
+      } else {
+        _pendingVerificationConfirmed = confirmation.verified;
+        _status = AuthStatus.awaitingVerification;
+      }
+
+      notifyListeners();
+    } on ApiClientException catch (error) {
+      // A refused code is a wrong guess, not a lost session. `_recordFrom` would
+      // move the interface to the sign-in form, which is the wrong screen for
+      // that answer and would hide the message explaining why it was refused, so
+      // the state goes back to where the person started and only the reason is
+      // recorded.
+      _recordFailureOnly(error);
+      _status = previous;
+      notifyListeners();
+    }
+  }
+
+/// Returns to the sign-in form from the "account created" screen.
   void dismissVerificationNotice() {
     if (_status != AuthStatus.awaitingVerification) {
       return;
     }
 
     _pendingVerificationEmail = null;
+    _pendingVerificationConfirmed = false;
     _status = AuthStatus.signedOut;
     notifyListeners();
   }
@@ -450,6 +517,18 @@ class AuthController extends ChangeNotifier {
   /// A request failure never keeps a session: the user asked for something they
   /// do not have, and leaving a half-authenticated screen would be worse.
   void _recordFrom(ApiClientException error) {
+    _recordFailureOnly(error);
+
+    _session = null;
+    _status = AuthStatus.signedOut;
+  }
+
+  /// Records the failure without moving the interface away from where it is.
+  ///
+  /// Used where the failure belongs to one attempt rather than to the session,
+  /// such as a refused verification code: the screen the person needs is the one
+  /// they are already on.
+  void _recordFailureOnly(ApiClientException error) {
     if (error is ApiFailureException) {
       _failureKind = AuthFailureKind.rejected;
       _failureCode = error.code;
@@ -465,9 +544,6 @@ class AuthController extends ChangeNotifier {
       _failureCorrelationId = null;
       _failureDetails = null;
     }
-
-    _session = null;
-    _status = AuthStatus.signedOut;
   }
 
   void _clearFailure() {

@@ -11,6 +11,8 @@ import {
   InMemoryRiskEventRepository,
   InMemorySessionRepository,
   InMemoryUserRepository,
+  InMemoryVerificationTokenRepository,
+  RecordingEmailVerificationNotifier,
   RecordingPasswordRecoveryNotifier,
 } from '../../testing/auth-doubles.js';
 import { AuthService } from './auth.service.js';
@@ -28,6 +30,8 @@ interface Harness {
   resetTokens: InMemoryPasswordResetTokenRepository;
   riskEvents: InMemoryRiskEventRepository;
   notifier: RecordingPasswordRecoveryNotifier;
+  verificationNotifier: RecordingEmailVerificationNotifier;
+  verificationTokens: InMemoryVerificationTokenRepository;
   clock: FakeClock;
 }
 
@@ -37,6 +41,8 @@ function buildService(overrides: DeepPartial<AppConfig> = {}): Harness {
   const resetTokens = new InMemoryPasswordResetTokenRepository();
   const riskEvents = new InMemoryRiskEventRepository();
   const notifier = new RecordingPasswordRecoveryNotifier();
+  const verificationNotifier = new RecordingEmailVerificationNotifier();
+  const verificationTokens = new InMemoryVerificationTokenRepository();
   const clock = new FakeClock();
   const config = new AppConfigService(testAppConfig(overrides));
 
@@ -46,12 +52,24 @@ function buildService(overrides: DeepPartial<AppConfig> = {}): Harness {
     resetTokens,
     riskEvents,
     notifier,
+    verificationNotifier,
+    verificationTokens,
     new AccessTokenService(config),
     config,
     clock,
   );
 
-  return { service, users, sessions, resetTokens, riskEvents, notifier, clock };
+  return {
+    service,
+    users,
+    sessions,
+    resetTokens,
+    riskEvents,
+    notifier,
+    verificationNotifier,
+    verificationTokens,
+    clock,
+  };
 }
 
 /** Error code a call is expected to be refused with. */
@@ -543,7 +561,10 @@ describe('AuthService password recovery', () => {
 });
 
 describe('AuthService.verifyEmail', () => {
-  it('leaves a pending account pending while verification is required', async () => {
+  it('activates a pending account once the address is proven', async () => {
+    // The customer-facing path reaches the same state: with no approval gate,
+    // proving the address is what makes the account usable. A flow that ended
+    // anywhere else would leave the customer with nothing they can do.
     const { service, users } = buildService({ auth: { requireEmailVerification: true } });
     const registered = await service.register(
       { email: 'person@example.com', password: PASSWORD },
@@ -554,21 +575,140 @@ describe('AuthService.verifyEmail', () => {
 
     const stored = await users.findById(registered.user.id);
     expect(stored?.emailVerifiedAt).not.toBeNull();
-    // A verified address is not an approval: the deployment still requires one.
-    expect(stored?.status).toBe('PENDING_VERIFICATION');
+    expect(stored?.status).toBe('ACTIVE');
   });
 
-  it('activates the account when the deployment does not require verification', async () => {
-    const { service, users } = buildService({ auth: { requireEmailVerification: false } });
+  it('keeps the account pending while the deployment requires an approval', async () => {
+    const { service, users } = buildService({
+      auth: { requireEmailVerification: true, accountApprovalRequired: true },
+    });
     const registered = await service.register(
       { email: 'person@example.com', password: PASSWORD },
       CONTEXT,
     );
-    users.setStatus(registered.user.id, 'PENDING_VERIFICATION');
 
     await service.verifyEmail(registered.user.id);
 
-    expect((await users.findById(registered.user.id))?.status).toBe('ACTIVE');
+    const stored = await users.findById(registered.user.id);
+    expect(stored?.emailVerifiedAt).not.toBeNull();
+    // A proven address is not an approval when the deployment asks for one.
+    expect(stored?.status).toBe('PENDING_VERIFICATION');
+  });
+
+  it('never lifts a suspension', async () => {
+    // A public endpoint must not be able to undo an administrative decision,
+    // even with a code that arrived before the suspension.
+    const { service, users } = buildService({ auth: { requireEmailVerification: true } });
+    const registered = await service.register(
+      { email: 'person@example.com', password: PASSWORD },
+      CONTEXT,
+    );
+    users.setStatus(registered.user.id, 'SUSPENDED');
+
+    await service.verifyEmail(registered.user.id);
+
+    const stored = await users.findById(registered.user.id);
+    expect(stored?.emailVerifiedAt).not.toBeNull();
+    expect(stored?.status).toBe('SUSPENDED');
+  });
+});
+
+describe('AuthService.confirmEmail', () => {
+  const EMAIL = 'person@example.com';
+
+  async function registerPending(
+    overrides: DeepPartial<AppConfig> = {},
+  ): Promise<Harness & { token: string }> {
+    const harness = buildService({ auth: { requireEmailVerification: true }, ...overrides });
+    await harness.service.register({ email: EMAIL, password: PASSWORD }, CONTEXT);
+
+    const token = harness.verificationNotifier.lastToken();
+
+    if (token === undefined) throw new Error('expected a verification message to be delivered');
+
+    return { ...harness, token };
+  }
+
+  it('proves the address and makes the account usable', async () => {
+    const { service, users, token } = await registerPending();
+    const id = users.all()[0]!.id;
+
+    const result = await service.confirmEmail(token);
+
+    expect(result).toEqual({ verified: true, canSignIn: true });
+    const stored = await users.findById(id);
+    expect(stored?.status).toBe('ACTIVE');
+    expect(stored?.emailVerifiedAt).not.toBeNull();
+  });
+
+  it('reports that the address is proven but the account is held for approval', async () => {
+    const { service, token } = await registerPending({
+      auth: { requireEmailVerification: true, accountApprovalRequired: true },
+    });
+
+    // Two different facts. Reporting only one would leave a client showing a
+    // sign-in form that cannot work.
+    expect(await service.confirmEmail(token)).toEqual({ verified: true, canSignIn: false });
+  });
+
+  it('never lets a code issued for another purpose be redeemed', async () => {
+    const { service, verificationTokens } = await registerPending();
+
+    // A password-recovery token is opaque too. Without the type in the lookup it
+    // would be hashed into the same table and satisfy the wrong check.
+    expect(verificationTokens.liveCount('EMAIL_VERIFY')).toBe(1);
+    expect(verificationTokens.liveCount('EMAIL_CHANGE')).toBe(0);
+    await expect(service.confirmEmail('vt_definitely-not-a-real-token')).rejects.toMatchObject({
+      code: 'TOKEN_INVALID',
+    });
+    // A wrong guess does not burn the code the customer actually holds.
+    expect(verificationTokens.liveCount('EMAIL_VERIFY')).toBe(1);
+  });
+
+  it('refuses a code twice', async () => {
+    const { service, verificationTokens, token } = await registerPending();
+
+    await service.confirmEmail(token);
+    await expect(service.confirmEmail(token)).rejects.toMatchObject({ code: 'TOKEN_INVALID' });
+    expect(verificationTokens.liveCount('EMAIL_VERIFY')).toBe(0);
+  });
+
+  it('refuses an expired code', async () => {
+    const { service, clock, token } = await registerPending();
+
+    // The window is 24h by default, so 25h puts it past.
+    clock.advance(25 * 3_600_000);
+
+    await expect(service.confirmEmail(token)).rejects.toMatchObject({ code: 'TOKEN_INVALID' });
+  });
+
+  it('never resurrects a suspended account', async () => {
+    const { service, users, token } = await registerPending();
+    const id = users.all()[0]!.id;
+    // A code that arrived before the decision must not be able to lift it.
+    users.setStatus(id, 'SUSPENDED');
+
+    const result = await service.confirmEmail(token);
+
+    expect(result).toEqual({ verified: true, canSignIn: false });
+    expect((await users.findById(id))?.status).toBe('SUSPENDED');
+  });
+
+  it('registers the account even when the provider refused the message', async () => {
+    // The token was created and hashed either way; reporting a failed
+    // registration here would tell the customer their account does not exist
+    // when it does.
+    const { service, verificationNotifier, verificationTokens } = buildService({
+      auth: { requireEmailVerification: true },
+    });
+    verificationNotifier.failWith = new Error('smtp unreachable');
+
+    const registered = await service.register({ email: EMAIL, password: PASSWORD }, CONTEXT);
+
+    expect(registered.user.status).toBe('PENDING_VERIFICATION');
+    expect(registered.tokens).toBeNull();
+    expect(verificationNotifier.delivered).toHaveLength(0);
+    expect(verificationTokens.liveCount()).toBe(1);
   });
 });
 

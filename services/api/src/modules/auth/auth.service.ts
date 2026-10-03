@@ -8,6 +8,7 @@ import {
   sha256Hex,
   TOKEN_PREFIX_PASSWORD_RESET,
   TOKEN_PREFIX_REFRESH,
+  TOKEN_PREFIX_VERIFICATION,
   verifyPasswordOrDummy,
   type Argon2Parameters,
 } from '@deliveryuy/auth';
@@ -17,6 +18,7 @@ import type {
   AuthSessionResponse,
   AuthTokens,
   AuthenticatedUser,
+  EmailConfirmationResult,
   PasswordRecoveryResult,
   RegisterResponse,
 } from '@deliveryuy/types';
@@ -25,15 +27,18 @@ import { ApiException } from '../../common/errors/api-exception.js';
 import { AccessTokenService } from '../../common/security/security.module.js';
 import {
   CLOCK,
+  EMAIL_VERIFICATION_NOTIFIER,
   PASSWORD_RECOVERY_NOTIFIER,
   PASSWORD_RESET_TOKEN_REPOSITORY,
   RISK_EVENT_REPOSITORY,
   SESSION_REPOSITORY,
   USER_REPOSITORY,
+  VERIFICATION_TOKEN_REPOSITORY,
   type Clock,
 } from './auth.tokens.js';
 import type {
   AuthUserRecord,
+  EmailVerificationNotifier,
   PasswordRecoveryNotifier,
   PasswordResetTokenRepository,
   RequestContext,
@@ -41,6 +46,7 @@ import type {
   SessionRecord,
   SessionRepository,
   UserRepository,
+  VerificationTokenRepository,
 } from './ports.js';
 
 /**
@@ -65,6 +71,10 @@ export class AuthService {
     private readonly resetTokens: PasswordResetTokenRepository,
     @Inject(RISK_EVENT_REPOSITORY) private readonly riskEvents: RiskEventRepository,
     @Inject(PASSWORD_RECOVERY_NOTIFIER) private readonly notifier: PasswordRecoveryNotifier,
+    @Inject(EMAIL_VERIFICATION_NOTIFIER)
+    private readonly verificationNotifier: EmailVerificationNotifier,
+    @Inject(VERIFICATION_TOKEN_REPOSITORY)
+    private readonly verificationTokens: VerificationTokenRepository,
     private readonly accessTokens: AccessTokenService,
     private readonly config: AppConfigService,
     @Inject(CLOCK) private readonly clock: Clock,
@@ -104,6 +114,7 @@ export class AuthService {
     // A pending account gets no session: handing one out would let an
     // unverified address act on the platform.
     if (verificationRequired) {
+      await this.startEmailVerification(user);
       this.logger.log(`Registered account awaiting email verification (${user.id})`);
       return { user: toWireUser(user), tokens: null, verificationRequired: true };
     }
@@ -113,6 +124,56 @@ export class AuthService {
       tokens: await this.startSession(user, context),
       verificationRequired: false,
     };
+  }
+
+  /**
+   * Issues a verification code and hands it to the delivery channel.
+   *
+   * Any earlier outstanding code is invalidated first, so a forwarded message
+   * cannot be used after the recipient asks for a new one. Without it, several
+   * valid codes for one account would each confirm the same address, which makes
+   * "this is the only one that works" impossible to reason about.
+   */
+  private async startEmailVerification(user: AuthUserRecord): Promise<void> {
+    const now = this.clock.now();
+
+    await this.verificationTokens.invalidateForUser({
+      userId: user.id,
+      type: 'EMAIL_VERIFY',
+      now,
+    });
+
+    const { raw, hash } = generateOpaqueToken(TOKEN_PREFIX_VERIFICATION);
+    const expiresAt = new Date(now.getTime() + this.emailVerificationTtlHours() * 3_600_000);
+
+    await this.verificationTokens.create({
+      userId: user.id,
+      type: 'EMAIL_VERIFY',
+      tokenHash: hash,
+      destination: user.email,
+      expiresAt,
+      now,
+    });
+
+    // The raw code goes to the delivery channel and nowhere else. A provider
+    // that throws is contained here: the account exists, the code is hashed and
+    // valid, and failing the registration now would tell the customer their
+    // account was not created when it was (AGENTS.md section 23).
+    try {
+      await this.verificationNotifier.deliver({
+        userId: user.id,
+        email: user.email,
+        token: raw,
+        expiresAt,
+        locale: user.locale,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Verification delivery for account ${user.id} failed: ` +
+          `${error instanceof Error ? error.name : 'unknown error'}. ` +
+          'The account exists and stays pending; nobody has the code yet.',
+      );
+    }
   }
 
   // ------------------------------------------------------------------- login
@@ -441,7 +502,13 @@ export class AuthService {
     });
 
     // The raw token goes to the delivery channel and nowhere else.
-    await this.notifier.deliver({ userId: user.id, email: user.email, token: raw, expiresAt });
+    await this.notifier.deliver({
+      userId: user.id,
+      email: user.email,
+      token: raw,
+      expiresAt,
+      locale: user.locale,
+    });
   }
 
   /**
@@ -464,7 +531,7 @@ export class AuthService {
     if (record === null) {
       throw new ApiException(
         ERROR_CODES.TOKEN_INVALID,
-        'Recovery link is invalid or has expired.',
+        'Recovery code is invalid or has expired.',
         undefined,
         HttpStatus.UNAUTHORIZED,
       );
@@ -485,17 +552,74 @@ export class AuthService {
   }
 
   /**
+   * Completes address verification with the code the customer received.
+   *
+   * The token is consumed in the same step that records the verification, so a
+   * link cannot be replayed, and the `destination` on the row is what gets
+   * verified: a code issued for one address never activates another.
+   *
+   * Whether a proven address is enough to sign in is a deployment decision
+   * (`ACCOUNT_APPROVAL_REQUIRED`), not a property of the address: with an
+   * approval gate the account stays pending, and the answer says so instead of
+   * leaving the client to guess.
+   */
+  public async confirmEmail(token: string): Promise<EmailConfirmationResult> {
+    const raw = this.assertOpaqueToken(token);
+    const now = this.clock.now();
+
+    const record = await this.verificationTokens.consumeByHash({
+      tokenHash: sha256Hex(raw),
+      type: 'EMAIL_VERIFY',
+      now,
+    });
+
+    if (record === null) {
+      throw new ApiException(
+        ERROR_CODES.TOKEN_INVALID,
+        'Verification code is invalid or has expired.',
+        undefined,
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    // Any other outstanding code for this address stops working: the address is
+    // proven, so a second code in an older message is a stale copy at best.
+    await this.verificationTokens.invalidateForUser({
+      userId: record.userId,
+      type: 'EMAIL_VERIFY',
+      now,
+    });
+
+    await this.users.markEmailVerified({
+      userId: record.userId,
+      now,
+      activate: !this.config.auth.accountApprovalRequired,
+    });
+
+    const user = await this.users.findById(record.userId);
+
+    return {
+      verified: true,
+      // False when the deployment holds the account for approval, and false also
+      // when an administrator suspended it in the meantime - reporting the
+      // second case is the point: the address is proven and the account is not
+      // usable, and the client needs to be told which one it is looking at.
+      canSignIn: user !== null && user.status === 'ACTIVE',
+    };
+  }
+
+  /**
    * Records that the address behind an account was verified.
    *
-   * Whether that is enough to sign in is a configuration decision, not a
-   * property of the address: deployments that require verification still
-   * require it here.
+   * The administrative path, which records the proof without a message being
+   * delivered. Whether that also makes the account usable is the same deployment
+   * decision the customer-facing path uses, so the two cannot disagree.
    */
   public async verifyEmail(userId: string): Promise<void> {
     await this.users.markEmailVerified({
       userId,
       now: this.clock.now(),
-      activate: !this.config.auth.requireEmailVerification,
+      activate: !this.config.auth.accountApprovalRequired,
     });
   }
 
@@ -539,6 +663,10 @@ export class AuthService {
 
   private refreshLifetimeMs(): number {
     return parseDurationToMs(this.config.auth.refreshExpiresIn);
+  }
+
+  private emailVerificationTtlHours(): number {
+    return this.config.auth.emailVerificationTtlHours;
   }
 
   private argon2(): Argon2Parameters {

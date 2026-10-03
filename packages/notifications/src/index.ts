@@ -1,48 +1,19 @@
-import {
-  NotificationProviderNotConfiguredError,
-  type NotificationProvider,
-} from './notification-provider.js';
+/**
+ * `@deliveryuy/notifications` - the notification boundary.
+ *
+ * A notification failure is reported, never raised into the operation that
+ * triggered it: an unreachable SMTP server must not roll back an order or a
+ * password reset (AGENTS.md section 23).
+ *
+ * What is exported is the port, the SMTP implementation and the template
+ * catalog. Composition happens in the application, not here, so a second
+ * delivery mechanism is an addition to the application rather than a change to
+ * this package.
+ */
 
+export * from './mail-transport.js';
 export * from './notification-provider.js';
-
-export const NOTIFICATION_PROVIDER_NAMES = ['none', 'fcm', 'smtp'] as const;
-export type NotificationProviderName = (typeof NOTIFICATION_PROVIDER_NAMES)[number];
-
-function reject(): Promise<never> {
-  return Promise.reject(new NotificationProviderNotConfiguredError());
-}
-
-class UnconfiguredNotificationProvider implements NotificationProvider {
-  getName(): string {
-    return 'none';
-  }
-
-  supports(): boolean {
-    return false;
-  }
-
-  send(): Promise<never> {
-    return reject();
-  }
-}
-
-const registry = new Map<NotificationProviderName, () => NotificationProvider>([
-  ['none', () => new UnconfiguredNotificationProvider()],
-]);
-
-export function registerNotificationProvider(
-  name: NotificationProviderName,
-  factory: () => NotificationProvider,
-): void {
-  registry.set(name, factory);
-}
-
-export function resolveNotificationProvider(name: NotificationProviderName): NotificationProvider {
-  const factory = registry.get(name);
-
-  if (!factory) {
-    throw new NotificationProviderNotConfiguredError();
-  }
-
-  return factory();
-}
+export * from './nodemailer-mail-transport.js';
+export * from './smtp-notification-provider.js';
+export * from './template.js';
+export * from './templates.js';

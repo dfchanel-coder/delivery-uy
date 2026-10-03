@@ -4,21 +4,28 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { API_PREFIX, configureApp } from '../../bootstrap.js';
 import { AppModule } from '../../app.module.js';
+import { APP_CONFIG } from '../../common/config/app-config.module.js';
+import { testAppConfig, type DeepPartial } from '../../testing/app-config.fixture.js';
+import type { AppConfig } from '@deliveryuy/config';
 import {
   FakeClock,
   InMemoryPasswordResetTokenRepository,
   InMemoryRiskEventRepository,
   InMemorySessionRepository,
   InMemoryUserRepository,
+  InMemoryVerificationTokenRepository,
+  RecordingEmailVerificationNotifier,
   RecordingPasswordRecoveryNotifier,
 } from '../../testing/auth-doubles.js';
 import {
   CLOCK,
+  EMAIL_VERIFICATION_NOTIFIER,
   PASSWORD_RECOVERY_NOTIFIER,
   PASSWORD_RESET_TOKEN_REPOSITORY,
   RISK_EVENT_REPOSITORY,
   SESSION_REPOSITORY,
   USER_REPOSITORY,
+  VERIFICATION_TOKEN_REPOSITORY,
 } from './auth.tokens.js';
 
 /**
@@ -78,16 +85,22 @@ interface Harness {
   users: InMemoryUserRepository;
   sessions: InMemorySessionRepository;
   notifier: RecordingPasswordRecoveryNotifier;
+  verificationNotifier: RecordingEmailVerificationNotifier;
+  verificationTokens: InMemoryVerificationTokenRepository;
+  clock: FakeClock;
 }
 
 let harness: Harness;
 
-async function startApp(): Promise<Harness> {
+async function startApp(configOverrides: DeepPartial<AppConfig> = {}): Promise<Harness> {
   const users = new InMemoryUserRepository();
   const sessions = new InMemorySessionRepository();
   const resetTokens = new InMemoryPasswordResetTokenRepository();
   const riskEvents = new InMemoryRiskEventRepository();
   const notifier = new RecordingPasswordRecoveryNotifier();
+  const verificationNotifier = new RecordingEmailVerificationNotifier();
+  const verificationTokens = new InMemoryVerificationTokenRepository();
+  const clock = new FakeClock();
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(USER_REPOSITORY)
@@ -100,15 +113,24 @@ async function startApp(): Promise<Harness> {
     .useValue(riskEvents)
     .overrideProvider(PASSWORD_RECOVERY_NOTIFIER)
     .useValue(notifier)
+    .overrideProvider(EMAIL_VERIFICATION_NOTIFIER)
+    .useValue(verificationNotifier)
+    .overrideProvider(VERIFICATION_TOKEN_REPOSITORY)
+    .useValue(verificationTokens)
     .overrideProvider(CLOCK)
-    .useValue(new FakeClock())
+    .useValue(clock)
+    // Overridden so a test can flip a deployment decision - here, that
+    // verification is required - without mutating the environment of the whole
+    // process, which the other suites in this file rely on.
+    .overrideProvider(APP_CONFIG)
+    .useValue(testAppConfig(configOverrides))
     .compile();
 
   const app = moduleRef.createNestApplication();
   configureApp(app);
   await app.init();
 
-  return { app, users, sessions, notifier };
+  return { app, users, sessions, notifier, verificationNotifier, verificationTokens, clock };
 }
 
 function server(): ReturnType<INestApplication['getHttpServer']> {
@@ -448,6 +470,119 @@ describe('rate limits on the public auth routes', () => {
       expect(response.status).toBe(HttpStatus.UNAUTHORIZED);
       expect(failure(response.body).code).toBe('INVALID_CREDENTIALS');
     }
+  });
+});
+
+describe('POST /auth/verify-email', () => {
+  /** Restarts the app with a deployment that requires a verified address. */
+  async function useVerificationRequired(): Promise<void> {
+    await harness.app.close();
+    harness = await startApp({ auth: { requireEmailVerification: true } });
+  }
+
+  async function registerPending(): Promise<string> {
+    const response = await request(server()).post(`${AUTH_PATH}/register`).send({
+      email: EMAIL,
+      password: PASSWORD,
+    });
+
+    expect(response.status).toBe(HttpStatus.CREATED);
+    expect(data<{ verificationRequired: boolean }>(response.body).verificationRequired).toBe(true);
+    // No session for a pending account: an unverified address must not act.
+    expect(data<{ tokens: unknown }>(response.body).tokens).toBeNull();
+
+    const token = harness.verificationNotifier.lastToken();
+
+    if (token === undefined) throw new Error('expected a verification message to be delivered');
+
+    return token;
+  }
+
+  it('lets the account sign in once the address is proven', async () => {
+    await useVerificationRequired();
+    const token = await registerPending();
+
+    expect(harness.users.all()[0]?.status).toBe('PENDING_VERIFICATION');
+
+    // 403 rather than 401: the credentials were right and the account is not
+    // usable yet, which is a different thing to tell somebody.
+    const denied = await request(server()).post(`${AUTH_PATH}/login`).send({
+      email: EMAIL,
+      password: PASSWORD,
+    });
+    expect(denied.status).toBe(HttpStatus.FORBIDDEN);
+
+    const response = await request(server()).post(`${AUTH_PATH}/verify-email`).send({ token });
+
+    expect(response.status).toBe(HttpStatus.OK);
+    expect(data<{ verified: boolean; canSignIn: boolean }>(response.body)).toEqual({
+      verified: true,
+      canSignIn: true,
+    });
+
+    const allowed = await request(server()).post(`${AUTH_PATH}/login`).send({
+      email: EMAIL,
+      password: PASSWORD,
+    });
+    expect(allowed.status).toBe(HttpStatus.OK);
+    expect(data<{ tokens: Tokens }>(allowed.body).tokens.refreshToken).toBeTypeOf('string');
+  });
+
+  it('answers that the account is proven but still held when approval is required', async () => {
+    // Two different facts, and the client needs both: showing a sign-in form for
+    // an account that cannot sign in is worse than saying nothing.
+    await harness.app.close();
+    harness = await startApp({
+      auth: { requireEmailVerification: true, accountApprovalRequired: true },
+    });
+    const token = await registerPending();
+
+    const response = await request(server()).post(`${AUTH_PATH}/verify-email`).send({ token });
+
+    expect(response.status).toBe(HttpStatus.OK);
+    expect(data<{ verified: boolean; canSignIn: boolean }>(response.body)).toEqual({
+      verified: true,
+      canSignIn: false,
+    });
+
+    const still = await request(server()).post(`${AUTH_PATH}/login`).send({
+      email: EMAIL,
+      password: PASSWORD,
+    });
+    // Refused for the honest reason: proven address, account still held.
+    expect(still.status).toBe(HttpStatus.FORBIDDEN);
+  });
+
+  it('rejects a code that was never issued', async () => {
+    await useVerificationRequired();
+
+    const response = await request(server())
+      .post(`${AUTH_PATH}/verify-email`)
+      .send({ token: 'vt_0000000000000000000000000000' });
+
+    expect(response.status).toBe(HttpStatus.UNAUTHORIZED);
+    expect(failure(response.body).code).toBe('TOKEN_INVALID');
+  });
+
+  it('refuses a code a second time', async () => {
+    await useVerificationRequired();
+    const token = await registerPending();
+
+    const first = await request(server()).post(`${AUTH_PATH}/verify-email`).send({ token });
+    expect(first.status).toBe(HttpStatus.OK);
+
+    // Single use: a message that ends up in a shared inbox must not be
+    // replayable by whoever received it later.
+    const replay = await request(server()).post(`${AUTH_PATH}/verify-email`).send({ token });
+    expect(replay.status).toBe(HttpStatus.UNAUTHORIZED);
+    expect(failure(replay.body).code).toBe('TOKEN_INVALID');
+  });
+
+  it('refuses a malformed body in the pipe', async () => {
+    const response = await request(server()).post(`${AUTH_PATH}/verify-email`).send({ token: 42 });
+
+    expect(response.status).toBe(HttpStatus.BAD_REQUEST);
+    expect(failure(response.body).code).toBe('VALIDATION_FAILED');
   });
 });
 

@@ -191,7 +191,10 @@ Add:
 
 ## PHASE 03 - Authentication
 
-Status: IN_PROGRESS
+Status: IN_PROGRESS - one exit criterion outstanding (the CI `integration` job,
+which has never run because this repository has no remote). Everything else in
+the phase is implemented, documented and verified locally or by hand against real
+infrastructure.
 
 Implement:
 
@@ -213,10 +216,11 @@ Implemented on 2026-10-02:
   issuer/verifier on `jose`, and the principal/RBAC model - 56 unit tests.
   Dependencies and their rejection criteria: `ADR-020`
 - `services/api/src/modules/auth`: ports, tokens, service, controller and DTOs,
-  with four Prisma adapters (`UserRepository`, `SessionRepository`,
-  `PasswordResetTokenRepository`, `RiskEventRepository`) and an
-  `UnavailablePasswordRecoveryNotifier` that refuses to pretend an email was sent
-  until a notification provider exists
+  with five Prisma adapters (`UserRepository`, `SessionRepository`,
+  `PasswordResetTokenRepository`, `RiskEventRepository`,
+  `VerificationTokenRepository`). `PasswordRecoveryNotifier` refuses to pretend an
+  email was sent while no provider exists, which was deferred until the
+  notification delivery slice below
 - refresh tokens are opaque and hashed; rotation detects replay through a
   conditional update and revokes the token family
 - `JwtAuthGuard` globally, `@Public()` to opt out, `@Roles()` and
@@ -230,24 +234,65 @@ Implemented on 2026-10-02:
 - `prisma/seed.ts` now creates the development accounts with real Argon2id
   hashes, credentials supplied by `SEED_*` variables, and the driver in
   `PENDING_REVIEW`
-- 5 infrastructure specs (`*.integration.spec.ts`) for the four Prisma adapters
+- 6 infrastructure specs (`*.integration.spec.ts`) for the five Prisma adapters
   and the Redis limiter, in a separate suite with a report assertion that fails
   when a test skipped (`docs/TESTING.MD`)
 
+Closed on 2026-10-02 by the notification delivery slice and the credential
+documentation:
+
+- `packages/notifications`: a real SMTP provider. `MailTransport` is the port,
+  `NodemailerMailTransport` is the only file that imports `nodemailer`, and the
+  templates (Spanish and Portuguese, `es` default) live in the package rather
+  than in a service. A delivery failure resolves with `accepted: false` instead
+  of throwing, so a mail outage cannot block a password reset for everyone.
+  Decisions: `ADR-022`
+- `services/api/src/common/notifications`: the port bound to the configured
+  provider, with a boot-time `verify()` that reports reachability without
+  refusing to start
+- `services/api/src/modules/auth`: `EmailVerificationNotifier` and
+  `VerificationTokenRepository` as two further ports, `POST /api/v1/auth/verify-email`,
+  and `PrismaVerificationTokenRepository`. Verification codes are opaque,
+  single-use, expiring and hashed, and redeeming one is a conditional update so
+  two simultaneous attempts cannot both win
+- `packages/config`: `SMTP_*`, `EMAIL_VERIFICATION_TTL_HOURS` and
+  `ACCOUNT_APPROVAL_REQUIRED`, with `superRefine` rules that refuse a half-set
+  SMTP configuration, credentials on a non-submission port, `SMTP_REQUIRE_TLS=false`
+  outside development or with credentials, and verification required with no
+  delivery channel
+- `readme.md`: which accounts the seed creates, that `.env.example` ships
+  `CHANGE_ME` for every password on purpose, and the SMTP variables
+- `packages/dart/core`: `EmailConfirmation` and `AuthApi.verifyEmail`, decoding
+  both facts of the answer rather than one
+- `apps/customer`: the code field on `VerificationPendingPage`, so the flow has
+  a way forward instead of only a "wait". A refused code returns to that screen
+  with the API's reason rather than dropping the person onto a sign-in form, and
+  `{ verified: true, canSignIn: false }` says the address is confirmed and the
+  account still needs approval, instead of offering a sign-in that would be
+  answered `403`
+
+Three real defects were found while building this, all fixed and covered:
+`markEmailVerified` used one flag for two decisions, so with
+`REQUIRE_EMAIL_VERIFICATION=true` a customer who proved their address stayed
+pending forever and `canSignIn` was unreachable; activation ignored the account
+status, so a code arriving after a suspension would have lifted it through a
+public endpoint; and `NodemailerMailTransport` refused port 587 with credentials,
+which is the ordinary STARTTLS submission path the configuration schema
+deliberately allows.
+
 Verified locally: `pnpm run lint`, `pnpm run build`, `pnpm run typecheck`,
-497 vitest tests across 17 files, `pnpm run flutter:check`.
+`pnpm run build:admin`, `pnpm run format:check`, `pnpm verify` exit 0, 553 vitest
+tests across 19 files, `pnpm run flutter:check` exit 0 with 130 Dart tests, and
+49 integration tests across 6 files with 0 skipped against real PostgreSQL and
+Redis. Both message flows were additionally verified by hand against a real SMTP
+conversation; see `SECURITY.md` for what was observed.
 
 Remaining before this phase can close:
 
-1. the CI `integration` job green, which is the only place the four Prisma
-   adapters, the Redis limiter, `prisma migrate deploy` and the seed run against
-   real infrastructure (see `PROJECT_STATE.md`, BLOCKED);
-2. a notification provider behind `PasswordRecoveryNotifier`. Until then,
-   `POST /auth/password/forgot` accepts and records the token but no message
-   leaves the process, which is why the adapter is named `Unavailable...` and
-   says so instead of returning a fake success;
-3. `README` / operator documentation of the bootstrap credentials the seed
-   creates.
+1. the CI `integration` job green, which is the only place the five Prisma
+   adapters, the Redis limiter, `prisma migrate deploy` and the seed run inside
+   the compose stack (see `PROJECT_STATE.md`, BLOCKED). No remote is configured
+   on this repository, so it has never run.
 
 ---
 

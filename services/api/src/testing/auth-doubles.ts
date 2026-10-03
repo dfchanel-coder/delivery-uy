@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Clock } from '../modules/auth/auth.tokens.js';
 import type {
   AuthUserRecord,
+  EmailVerificationNotifier,
   NewSession,
   PasswordRecoveryNotifier,
   PasswordResetTokenInput,
@@ -12,6 +13,9 @@ import type {
   SessionRecord,
   SessionRepository,
   UserRepository,
+  VerificationTokenKind,
+  VerificationTokenRecord,
+  VerificationTokenRepository,
 } from '../modules/auth/ports.js';
 
 /** Strips `readonly` so a test double can mutate what it stores. */
@@ -79,6 +83,11 @@ export class InMemoryUserRepository implements UserRepository {
     if (user === undefined || this.isDeleted(user)) return null;
 
     return { ...user };
+  }
+
+  /** Test helper: every account still stored, for assertions about the whole set. */
+  public all(): AuthUserRecord[] {
+    return [...this.users.values()].map((user) => ({ ...user }));
   }
 
   public async createCustomer(input: {
@@ -160,7 +169,9 @@ export class InMemoryUserRepository implements UserRepository {
     if (user === undefined) return;
 
     user.emailVerifiedAt = input.now;
-    if (input.activate) user.status = 'ACTIVE';
+    // Only a pending account may be activated, exactly like the Prisma adapter:
+    // a late code must not lift a suspension.
+    if (input.activate && user.status === 'PENDING_VERIFICATION') user.status = 'ACTIVE';
   }
 
   /** Test helper: changes the account status, as an administrator would. */
@@ -423,6 +434,7 @@ export class RecordingPasswordRecoveryNotifier implements PasswordRecoveryNotifi
     email: string;
     token: string;
     expiresAt: Date;
+    locale: string;
   }): Promise<void> {
     this.delivered.push(input);
 
@@ -432,5 +444,110 @@ export class RecordingPasswordRecoveryNotifier implements PasswordRecoveryNotifi
   /** The token of the most recent delivery, or undefined if there was none. */
   public lastToken(): string | undefined {
     return this.delivered.at(-1)?.token;
+  }
+}
+
+/** Records verification codes. Separate from recovery so a test cannot confuse them. */
+export class RecordingEmailVerificationNotifier implements EmailVerificationNotifier {
+  public readonly delivered: { userId: string; email: string; token: string; expiresAt: Date }[] =
+    [];
+
+  /** Set by a test to simulate a provider that refused the message. */
+  public failWith: Error | null = null;
+
+  public deliver(input: {
+    userId: string;
+    email: string;
+    token: string;
+    expiresAt: Date;
+    locale: string;
+  }): Promise<void> {
+    if (this.failWith !== null) return Promise.reject(this.failWith);
+
+    this.delivered.push(input);
+
+    return Promise.resolve();
+  }
+
+  public lastToken(): string | undefined {
+    return this.delivered.at(-1)?.token;
+  }
+}
+
+interface StoredVerificationToken extends Mutable<VerificationTokenRecord> {
+  type: VerificationTokenKind;
+  tokenHash: string;
+}
+
+export class InMemoryVerificationTokenRepository implements VerificationTokenRepository {
+  private readonly tokens = new Map<string, StoredVerificationToken>();
+
+  /** Test helper: codes that could still be redeemed. */
+  public liveCount(type?: VerificationTokenKind): number {
+    return [...this.tokens.values()].filter(
+      (token) => token.usedAt === null && (type === undefined || token.type === type),
+    ).length;
+  }
+
+  public async create(input: {
+    userId: string;
+    type: VerificationTokenKind;
+    tokenHash: string;
+    destination: string;
+    expiresAt: Date;
+    now: Date;
+  }): Promise<VerificationTokenRecord> {
+    const created: StoredVerificationToken = {
+      id: randomUUID(),
+      userId: input.userId,
+      type: input.type,
+      tokenHash: input.tokenHash,
+      destination: input.destination,
+      expiresAt: input.expiresAt,
+      usedAt: null,
+    };
+
+    this.tokens.set(created.id, created);
+
+    return { ...created };
+  }
+
+  public async consumeByHash(input: {
+    tokenHash: string;
+    type: VerificationTokenKind;
+    now: Date;
+  }): Promise<VerificationTokenRecord | null> {
+    for (const token of this.tokens.values()) {
+      if (token.tokenHash !== input.tokenHash) continue;
+      // A code issued for another purpose must not satisfy this one, which is
+      // why the type is compared rather than trusted from the caller.
+      if (token.type !== input.type) return null;
+      if (token.usedAt !== null) return null;
+      if (token.expiresAt.getTime() <= input.now.getTime()) return null;
+
+      token.usedAt = input.now;
+
+      return { ...token };
+    }
+
+    return null;
+  }
+
+  public async invalidateForUser(input: {
+    userId: string;
+    type: VerificationTokenKind;
+    now: Date;
+  }): Promise<number> {
+    let invalidated = 0;
+
+    for (const token of this.tokens.values()) {
+      if (token.userId !== input.userId || token.type !== input.type) continue;
+      if (token.usedAt !== null) continue;
+
+      token.usedAt = input.now;
+      invalidated += 1;
+    }
+
+    return invalidated;
   }
 }

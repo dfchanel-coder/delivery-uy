@@ -9,6 +9,7 @@ import {
 import type {
   AuthSessionResponse,
   AuthenticatedUser,
+  EmailConfirmationResult,
   PasswordRecoveryAccepted,
   PasswordRecoveryResult,
   RegisterResponse,
@@ -27,6 +28,7 @@ import {
   PasswordRecoveryRequestDto,
   RefreshTokenDto,
   RegisterDto,
+  VerifyEmailDto,
 } from './dto/auth.dto.js';
 import type { RequestContext } from './ports.js';
 
@@ -155,6 +157,20 @@ export class AuthController {
   @RateLimit({ name: 'auth:reset:ip', scope: 'ip', limit: 10, windowSeconds: 3600 })
   public async reset(@Body() body: PasswordRecoveryCompleteDto): Promise<PasswordRecoveryResult> {
     return this.auth.completePasswordRecovery(body.token, body.password);
+  }
+
+  @Public()
+  @Post('verify-email')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Confirm an email address with the code that was delivered.',
+    description:
+      'Consumes the verification token. `canSignIn` is false when the deployment also requires an ' +
+      'administrator approval, because a verified address is not the same thing as a usable account.',
+  })
+  @RateLimit({ name: 'auth:verify-email:ip', scope: 'ip', limit: 10, windowSeconds: 3600 })
+  public async verifyEmail(@Body() body: VerifyEmailDto): Promise<EmailConfirmationResult> {
+    return this.auth.confirmEmail(body.token);
   }
 }
 

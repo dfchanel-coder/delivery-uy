@@ -246,13 +246,21 @@ export class PrismaUserRepository implements UserRepository {
     now: Date;
     activate: boolean;
   }): Promise<void> {
+    // The proof is always recorded, even for an account that cannot be activated.
     await this.prisma.user.update({
       where: { id: input.userId },
-      data: {
-        emailVerifiedAt: input.now,
-        status: input.activate ? UserStatus.ACTIVE : undefined,
-        updatedAt: input.now,
-      },
+      data: { emailVerifiedAt: input.now, updatedAt: input.now },
+    });
+
+    if (!input.activate) return;
+
+    // Activation only moves a pending account forward. Without this guard a code
+    // that arrived after an administrator suspended or disabled the account would
+    // lift that decision through a public endpoint, which would make suspending
+    // unenforceable (AGENTS.md sections 32, 92).
+    await this.prisma.user.updateMany({
+      where: { id: input.userId, status: UserStatus.PENDING_VERIFICATION },
+      data: { status: UserStatus.ACTIVE, updatedAt: input.now },
     });
   }
 }

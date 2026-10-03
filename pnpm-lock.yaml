@@ -316,10 +316,17 @@ importers:
         version: link:../typescript-config
 
   packages/notifications:
+    dependencies:
+      nodemailer:
+        specifier: ^10.0.13
+        version: 10.0.13
     devDependencies:
       '@deliveryuy/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
+      '@types/nodemailer':
+        specifier: ^8.0.2
+        version: 8.0.2
 
   packages/payments:
     devDependencies:
@@ -352,6 +359,9 @@ importers:
       '@deliveryuy/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@deliveryuy/notifications':
+        specifier: workspace:*
+        version: link:../../packages/notifications
       '@deliveryuy/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -1450,6 +1460,9 @@ packages:
 
   '@types/node@22.20.4':
     resolution: {integrity: sha512-zJRE40jpHtKqE/C4fgHrAKQLJuSpzEnP9ff9Y7YtoR3Wd2pwqzlekDeEuUQXjRd+QCYnVnNwuJYmhdk9XV8gvA==}
+
+  '@types/nodemailer@8.0.2':
+    resolution: {integrity: sha512-c7M5ox8p0nEOfbJ2E9Qcmt8/QCu/VzsiAhzBiZbvky2PhKZDHpKB3sQHBM5MEZNkCfBOaS6S9//AGPRTNB7IaA==}
 
   '@types/qs@6.15.1':
     resolution: {integrity: sha512-GZHUBZR9hckSUhrxmp1nG6NwdpM9fCunJwyThLW1X3AyHgd9IlHb6VANpQQqDr2o/qQp6McZ3y/IA2rVzKzSbw==}
@@ -2762,6 +2775,10 @@ packages:
   node-releases@2.0.57:
     resolution: {integrity: sha512-kQK9LGGFiHtrWiNhZtA7Qbw17AQz+dmsEKODRIVTXA9+e5MS/2gZEBhYJt13GrAz5/IOZKddH/0Z3TP/Zgo+yw==}
     engines: {node: '>=18'}
+
+  nodemailer@10.0.13:
+    resolution: {integrity: sha512-SzG86OlvcW/NNhUFC6uROMwRTL4n7MswfQqC/T8mhkmnY1YVa23zUEMYi4ijSeXSl9GLz9ZeTJDUatEDuY5FeQ==}
+    engines: {node: '>=20.0.0'}
 
   normalize-path@3.0.0:
     resolution: {integrity: sha512-6eZs5Ls3WtCisHWp9S2GUy8dqkpGi4BVSz3GaqiE6ezub0512ESztXUwUB6C6IKbQkY2Pnb/mD4WYojCRwcwLA==}
@@ -4388,6 +4405,10 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/nodemailer@8.0.2':
+    dependencies:
+      '@types/node': 22.20.4
+
   '@types/qs@6.15.1': {}
 
   '@types/range-parser@1.2.7': {}
@@ -5823,6 +5844,8 @@ snapshots:
       whatwg-url: 5.0.0
 
   node-releases@2.0.57: {}
+
+  nodemailer@10.0.13: {}
 
   normalize-path@3.0.0: {}
 

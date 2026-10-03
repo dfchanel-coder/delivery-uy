@@ -3,7 +3,7 @@
 LAST_UPDATED: 2026-10-02
 
 CURRENT_PHASE: PHASE 03
-CURRENT_MODULE: Authentication - Argon2id hashing, access and refresh tokens, session revocation, RBAC, rate limiting, development user seed
+CURRENT_MODULE: Authentication - Argon2id hashing, access and refresh tokens, session revocation, RBAC, rate limiting, password recovery and address verification over real SMTP, development user seed
 
 ---
 
@@ -14,7 +14,7 @@ CURRENT_MODULE: Authentication - Argon2id hashing, access and refresh tokens, se
 - Product, stack, roles and order state machine defined
 - ARCHITECTURE.md, DATABASE.md, SECURITY.md, LEGAL.md finalized
 - docs/ERD.md, docs/SCHEMA_PROPOSAL.md, docs/MODULE_BOUNDARIES.md
-- ADR-001 ... ADR-021 accepted (ADR-004 and ADR-015 carry
+- ADR-001 ... ADR-022 accepted (ADR-004 and ADR-015 carry
   `LEGAL_REVIEW_REQUIRED`)
 
 ### PHASE 01 - Monorepo (foundation slice)
@@ -52,7 +52,9 @@ Shared packages:
 - `packages/database` - Prisma client factory and health check with a real
   timeout; datasource-only schema (entity models belong to PHASE 02)
 - `packages/maps`, `payments`, `billing`, `notifications`, `storage` - provider
-  interfaces with explicit "not configured" guards instead of fake adapters
+  interfaces with explicit "not configured" guards instead of fake adapters.
+  `notifications` is the one that now has a real implementation: PHASE 03 added
+  the SMTP provider behind its port (see PHASE 03 below)
 - `packages/ui` - README explaining why it is intentionally empty for now
 - `packages/dart/core` (`deliveryuy_core`) - shared Dart contracts: validated
   build configuration, the `/api/v1` envelope decoder, an `ApiClient` and the
@@ -94,11 +96,14 @@ Applications (real, buildable, tested):
     the client: the interface repeats the `details.reasons` the API returns
     instead of keeping a length rule that could drift from
     `PASSWORD_MIN_LENGTH`
-  - `VerificationPendingPage` states only that the account exists and cannot sign
-    in yet. It does not claim a message was sent, because delivery of the
-    verification message is a deployment concern that is still unbuilt (see
-    CURRENT RISKS), and promising it would be the kind of fake the project
-    forbids
+  - `VerificationPendingPage` states only what the API actually did, and offers
+    the code field the delivery message carries, so the flow has a way forward
+    instead of only a "wait". It never asserts the message arrived: delivery
+    depends on the provider the deployment configures, so the copy is
+    conditional ("si recibiste el mensaje"). When a deployment also requires
+    approval, the answer `{ verified: true, canSignIn: false }` moves the screen
+    to "Tu correo quedó verificado" with the approval stated, instead of
+    offering a sign-in the API would answer `403 EMAIL_NOT_VERIFIED`
   - Session persistence (ADR-021): only the refresh token is written, through the
     `TokenStore` port in `packages/dart/core`, implemented in the application by
     `SecureTokenStore` over `flutter_secure_storage` (Android Keystore /
@@ -168,11 +173,11 @@ typecheck, lint and the vitest suite.
 
 ### PHASE 03 - Authentication
 
-Implemented on 2026-10-02 and **verified against real infrastructure**: the four
+Implemented on 2026-10-02 and **verified against real infrastructure**: the five
 Prisma adapters and the Redis limiter ran in the integration suite with 0
-skipped, and the API was exercised over HTTP. **Not closed**: password recovery
-and address verification still have no delivery channel, and the CI
-`integration` job has not run (see BLOCKED and IN_PROGRESS).
+skipped, the API was exercised over HTTP, and both delivered messages were
+verified by hand against a real SMTP conversation. **Not closed**: the CI
+`integration` job has never run (see BLOCKED).
 
 `packages/auth` (ADR-020):
 
@@ -191,12 +196,15 @@ and address verification still have no delivery channel, and the CI
 `services/api`:
 
 - `modules/auth`: ports, injection tokens, `AuthService`, `AuthController` and
-  validated DTOs. Registration, login, logout, logout-all, refresh, `GET /auth/me`
-  and password recovery
-- four Prisma adapters (`UserRepository`, `SessionRepository`,
-  `PasswordResetTokenRepository`, `RiskEventRepository`) plus
-  `UnavailablePasswordRecoveryNotifier`, which refuses to claim an email was sent
-  while no notification provider exists
+  validated DTOs. Registration, login, logout, logout-all, refresh,
+  `GET /auth/me`, password recovery and `POST /auth/verify-email`
+- five Prisma adapters (`UserRepository`, `SessionRepository`,
+  `PasswordResetTokenRepository`, `RiskEventRepository`,
+  `VerificationTokenRepository`) plus the code delivery channel. It is bound by
+  configuration: `SmtpCodeDeliveryNotifier` sends through
+  `@deliveryuy/notifications`, and `UnavailableCodeDeliveryNotifier` refuses to
+  claim a message was sent while no provider exists. The token is created and
+  hashed either way, so turning a provider on changes delivery and nothing else
 - refresh tokens are opaque random values with only their SHA-256 stored; rotation
   is a conditional `updateMany` inside a transaction, so a replay loses the race,
   revokes the whole token family and raises a `RiskEvent`
@@ -214,12 +222,38 @@ and address verification still have no delivery channel, and the CI
 
 `packages/config`:
 
-- new keys `REQUIRE_EMAIL_VERIFICATION`, `REGISTER_DEFAULT_ROLE`,
+- new keys `REQUIRE_EMAIL_VERIFICATION`, `ACCOUNT_APPROVAL_REQUIRED`,
+  `EMAIL_VERIFICATION_TTL_HOURS`, `REGISTER_DEFAULT_ROLE`,
   `PASSWORD_RESET_TTL_HOURS`, `TRUST_PROXY_HOPS`, `RATE_LIMIT_BACKEND`, the
-  `duration.ts` parser and a `superRefine` rule
+  `SMTP_*` notification keys, the `duration.ts` parser and a `superRefine` rule
 - `REGISTER_DEFAULT_ROLE` accepts only `CUSTOMER`, and tests reject `ADMIN` and
   `MERCHANT`: self-registration cannot grant an elevated role even by
   misconfiguration
+- `ACCOUNT_APPROVAL_REQUIRED` separates "prove the address" from "the account is
+  usable". One flag used to mean both, which left `canSignIn` unreachable
+  through HTTP: proving an address never activated the account, so the customer
+  had no way out
+- `SMTP_REQUIRE_TLS` (default `true`) exists so a laptop can talk to a local
+  sink with no certificate. The schema refuses it outside development and
+  whenever `SMTP_USER` is set, and `NodemailerMailTransport` refuses it again in
+  its constructor
+
+`packages/notifications` (ADR-022):
+
+- a real SMTP provider. `MailTransport` is the port, `NodemailerMailTransport`
+  is the only file in the workspace that imports `nodemailer`, and
+  `SmtpNotificationProvider` resolves with `accepted: false` instead of
+  throwing when a send fails
+- templates for the verification and recovery messages in Spanish and
+  Portuguese, with `es` as default and a `pt-BR` -> `pt` -> `es` fallback.
+  Interpolation is strict in both directions and the HTML is always escaped
+- `Message-ID` is `sha256(idempotencyKey)` where the key is
+  `${templateKey}:${sha256Hex(token)}`, so a genuine re-send reuses the header
+  and the token never reaches it
+- `NOTIFICATION_PROVIDER` is bound as an `InjectionToken<NotificationProvider>`
+  in one `notifierBinding()` inside `AuthModule`; `fcm` resolves to
+  `UnconfiguredNotificationProvider` with a warning instead of silently
+  resolving to something that cannot send email
 
 Development seed:
 
@@ -237,8 +271,20 @@ Development seed:
 
 Testing:
 
-- 5 infrastructure specs in a separate suite (`vitest.integration.config.ts`):
-  the four Prisma adapters and `RedisRateLimiter`, including failing closed
+- 6 infrastructure specs in a separate suite (`vitest.integration.config.ts`):
+  the five Prisma adapters and `RedisRateLimiter`, including failing closed
+- 26 tests in `packages/notifications`, 26 in `packages/config`, 5 new
+  `POST /auth/verify-email` cases over HTTP, `AuthService` cases for
+  `verifyEmail`/`confirmEmail`, and 7 new cases for the verification-token
+  adapter, including one asserting that activation after verification leaves a
+  `SUSPENDED` and a `DISABLED` account untouched while still recording the proof
+- three `.env.example` drift tests, which is what makes the PHASE 01 claim that
+  the example mirrors the schema true rather than aspirational: every key the
+  schema reads is declared, every declared key is read by the schema or by the
+  seed, and no credential-shaped value is anything but empty or the `CHANGE_ME`
+  placeholder that the schema and the seed both refuse at runtime. Three keys had
+  already drifted silently before the test existed; the guard was checked by
+  deleting two of them and watching it fail
 - `services/api/src/testing/infrastructure.ts` is the shared guard
   (`withDatabase`, `withRedis`, `Reach<T>`), returning a discriminated result
   instead of throwing so a spec can skip in one branch
@@ -249,8 +295,8 @@ Testing:
 - `SECURITY.md` "Security Test Baseline" records which of the required security
   tests exist and which are still unverified or not applicable
 
-Documentation updated: `ADR-020`, `SECURITY.md`, `docs/API_RULES.md`,
-`docs/TESTING.MD`, `ROADMAP.MD`.
+Documentation updated: `ADR-020`, `ADR-022`, `SECURITY.md`, `docs/API_RULES.md`,
+`docs/TESTING.MD`, `ROADMAP.MD`, `readme.md`.
 
 ### Verified by running the code
 
@@ -279,29 +325,54 @@ Documentation updated: `ADR-020`, `SECURITY.md`, `docs/API_RULES.md`,
     **zero** requests. Had the keystore entry survived sign-out, the launch would
     have logged a `/auth/refresh` attempt
 
+### Verified against a real SMTP conversation
+
+Run against a local sink outside the repository (not a committed fixture), with
+`NOTIFICATION_PROVIDER=smtp`, `SMTP_REQUIRE_TLS=false` and
+`REQUIRE_EMAIL_VERIFICATION=true`:
+
+- the boot-time provider `verify()` reporting the host reachable
+- `POST /auth/register` -> `201`, `status: PENDING_VERIFICATION`, `tokens: null`,
+  `verificationRequired: true`, and the verification message arriving as MIME with
+  the right sender, subject, recipients and a `Message-ID` that is a hash rather
+  than the token
+- `POST /auth/login` before proving the address -> `403 EMAIL_NOT_VERIFIED`
+- `POST /auth/verify-email` with the code from the message -> `200
+  {"verified":true,"canSignIn":true}`, then `POST /auth/login` -> `200`, then the
+  same code again -> `401 TOKEN_INVALID`
+- `POST /auth/password/forgot` -> `202`, the recovery message arriving as MIME
+  with its own hash and a `pr_` token, `POST /auth/password/reset` -> `200`,
+  `POST /auth/login` with the new password -> `200`, and the same reset code again
+  -> `401`
+- no plaintext code in any log line: the notifiers log the account id and the
+  provider name only, and `Message-ID` carries the digest
+
 ---
 
 ## IN_PROGRESS
 
-- PHASE 03 - Authentication: implementation, documentation, lint, typecheck,
-  505 unit/API tests, the Dart gate and the integration suite against real
-  infrastructure all pass. What keeps the phase open:
-  - `PasswordRecoveryNotifier` still has no real delivery channel. The adapter is
-    named `Unavailable...` and refuses to pretend an email was sent, which is the
-    correct shape but not the finished feature. Address verification depends on
-    the same channel;
+- PHASE 03 - Authentication: implementation, documentation, `pnpm verify` exit 0
+  (553 unit/API tests), the Dart gate exit 0, the integration suite against real
+  PostgreSQL and Redis (49 executed, 0 skipped, 6 files) and a real SMTP
+  conversation for both delivered messages all pass. One item keeps the phase
+  open:
   - the CI `integration` job has never run on GitHub, so the compose-based proof
-    is still outstanding (see BLOCKED).
+    is still outstanding (see BLOCKED). No remote is configured on this
+    repository.
 - PHASE 02 - Database: `0001_init` applied, the seed proven idempotent and the
   database integration specs green locally. The compose-based proof in CI is
   still outstanding (ADR-019).
 - PHASE 01 - Monorepo: only the Docker-backed verification of exit criterion 3 is
   outstanding (see BLOCKED).
-- Mobile: `login`, `register`, `logout` and secure session persistence exist end
-  to end and are proven on the emulator (ADR-021). `apps/merchant` and
-  `apps/driver` still hold their sessions in memory only, and neither has a
-  screen beyond its own placeholder: the merchant and driver products do not
-  exist yet, so there is nothing for persistence to serve there
+- Mobile: `login`, `register`, `logout`, `verify-email` and secure session
+  persistence exist end to end and are proven on the emulator (ADR-021).
+  `apps/merchant` and `apps/driver` still hold their sessions in memory only, and
+  neither has a screen beyond its own placeholder: the merchant and driver
+  products do not exist yet, so there is nothing for persistence to serve there
+- Password recovery has no screen anywhere yet. `POST /auth/password/forgot` and
+  `POST /auth/password/reset` work and are proven end to end, and `AuthApi` has no
+  method for them, so the customer application can neither request a reset nor
+  redeem a code. PHASE 03's backend scope is complete; the interface is not
 
 ---
 
@@ -338,8 +409,8 @@ the orphaned children.
   This closes the PHASE 02 apply-migration criterion.
 - The seed runs twice: 4 users on the first run, 0 on the second, with
   `assert-seeded-users.mjs` green both times.
-- The integration suite reports **42 executed, 0 skipped, 5 files**, and
-  `scripts/assert-integration-report.mjs` exits 0. The four Prisma auth adapters
+- The integration suite reports **49 executed, 0 skipped, 6 files**, and
+  `scripts/assert-integration-report.mjs` exits 0. The five Prisma auth adapters
   and the `RedisRateLimiter` are therefore proven against real PostgreSQL and
   real Redis.
 - The API was run and exercised over HTTP: `/health/live`, `/health/ready`
@@ -364,14 +435,14 @@ the orphaned children.
 
 ## NEXT
 
-1. PHASE 03 - implement a notification provider behind
-   `PasswordRecoveryNotifier` so password recovery and address verification can
-   actually deliver a message, and document the seeded bootstrap credentials
-2. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the
+1. PHASE 03 / PHASE 01 - run the CI `integration` job so the compose files, not
+   just reachable endpoints, are proven. It has never run: no remote is configured
+2. Mobile - give the customer application a password recovery screen
+   (`AuthApi.forgotPassword` / `resetPassword`, then a request and a redeem
+   screen). The endpoints are proven; only the interface is missing
+3. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the
    existing `TokenStore` port. Deliberately deferred: both apps are placeholders,
    so the file would be written against nothing and would only look finished
-3. PHASE 03 / PHASE 01 - run the CI `integration` job so the compose files, not
-   just reachable endpoints, are proven
 4. PHASE 04 - Users and roles: per-role permissions and guards on real endpoints,
    starting from the matrix `packages/auth` already owns
 5. Implement provider adapters behind the existing interfaces (map, payment,
@@ -388,10 +459,16 @@ the orphaned children.
   (`LEGAL_REVIEW_REQUIRED`)
 - Payment provider production credentials not configured
 - Map provider not yet selected
-- Password recovery and address verification have no delivery channel yet
-  (`UnavailablePasswordRecoveryNotifier`); the token is generated, stored and
-  single-use, but nothing sends it. A deployment that leaves it there has
-  password recovery that only works by reading the database
+- A deployment that leaves `NOTIFICATION_PROVIDER=none` has password recovery
+  that only works by reading the database. The provider refuses to claim a
+  message was sent and the token is still created and hashed, so the account is
+  not locked out by accident - but nobody receives anything. The schema refuses
+  this combination only when `REQUIRE_EMAIL_VERIFICATION=true`, because that is
+  the case where the accounts are unusable without it
+- `ACCOUNT_APPROVAL_REQUIRED=true` holds accounts in `PENDING_VERIFICATION` after
+  the address is proven. A deployment that sets it without an administrative
+  approval path has accounts that can never sign in, and the configuration
+  cannot detect the missing screen
 - Docker unavailable in the current environment. PostgreSQL and Redis were run
   locally outside the repository to unblock verification, which proves the code
   but not the compose files (see BLOCKED)

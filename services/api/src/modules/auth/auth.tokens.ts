@@ -1,10 +1,12 @@
 import type { InjectionToken } from '@nestjs/common';
 import type {
+  EmailVerificationNotifier,
   PasswordRecoveryNotifier,
   PasswordResetTokenRepository,
   RiskEventRepository,
   SessionRepository,
   UserRepository,
+  VerificationTokenRepository,
 } from './ports.js';
 
 /**
@@ -24,6 +26,10 @@ export const RISK_EVENT_REPOSITORY: InjectionToken<RiskEventRepository> =
   'DELIVERYUY_RISK_EVENT_REPOSITORY';
 export const PASSWORD_RECOVERY_NOTIFIER: InjectionToken<PasswordRecoveryNotifier> =
   'DELIVERYUY_PASSWORD_RECOVERY_NOTIFIER';
+export const EMAIL_VERIFICATION_NOTIFIER: InjectionToken<EmailVerificationNotifier> =
+  'DELIVERYUY_EMAIL_VERIFICATION_NOTIFIER';
+export const VERIFICATION_TOKEN_REPOSITORY: InjectionToken<VerificationTokenRepository> =
+  'DELIVERYUY_VERIFICATION_TOKEN_REPOSITORY';
 
 /**
  * Time source.

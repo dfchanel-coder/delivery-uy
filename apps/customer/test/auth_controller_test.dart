@@ -388,6 +388,233 @@ void main() {
     });
   });
 
+  group('confirmEmail', () {
+    Future<AuthController> pendingAccount() async {
+      final AuthController controller = answeringWith(<String, Object?>{
+        'user': _wireUser(status: 'PENDING_VERIFICATION'),
+        'tokens': null,
+        'verificationRequired': true,
+      });
+
+      await controller.register(
+        email: 'new@deliveryuy.local',
+        password: 'a-long-enough-one',
+      );
+
+      return controller;
+    }
+
+    test('sends only the token, trimmed, and moves to the sign-in form', () async {
+      final AuthController controller = controllerOver((http.Request request) async {
+        if (request.url.path.endsWith('/register')) {
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(status: 'PENDING_VERIFICATION'),
+                'tokens': null,
+                'verificationRequired': true,
+              },
+            }),
+            201,
+            headers: <String, String>{'content-type': 'application/json'},
+          );
+        }
+
+        return http.Response(
+          jsonEncode(<String, Object?>{
+            'data': <String, Object?>{'verified': true, 'canSignIn': true},
+          }),
+          200,
+          headers: <String, String>{'content-type': 'application/json'},
+        );
+      });
+
+      await controller.register(
+        email: 'new@deliveryuy.local',
+        password: 'a-long-enough-one',
+      );
+      await controller.confirmEmail('  vt_abc123  ');
+
+      expect(sent, hasLength(2));
+      expect(jsonDecode(sent.last.body), <String, Object?>{'token': 'vt_abc123'});
+      expect(sent.last.url.path, '/api/v1/auth/verify-email');
+      // No credential is needed: the code is the credential.
+      expect(sent.last.headers.containsKey('authorization'), isFalse);
+      expect(controller.status, AuthStatus.signedOut);
+      expect(controller.pendingVerificationEmail, isNull);
+      expect(controller.failureKind, isNull);
+    });
+
+    test('stays on the waiting screen when the deployment also requires approval', () async {
+      final AuthController controller = controllerOver((http.Request request) async {
+        if (request.url.path.endsWith('/register')) {
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(status: 'PENDING_VERIFICATION'),
+                'tokens': null,
+                'verificationRequired': true,
+              },
+            }),
+            201,
+            headers: <String, String>{'content-type': 'application/json'},
+          );
+        }
+
+        // Two facts, and the second one is false: the address is proven but the
+        // account is not usable yet.
+        return http.Response(
+          jsonEncode(<String, Object?>{
+            'data': <String, Object?>{'verified': true, 'canSignIn': false},
+          }),
+          200,
+          headers: <String, String>{'content-type': 'application/json'},
+        );
+      });
+
+      await controller.register(
+        email: 'new@deliveryuy.local',
+        password: 'a-long-enough-one',
+      );
+      await controller.confirmEmail('vt_abc123');
+
+      expect(controller.status, AuthStatus.awaitingVerification);
+      expect(controller.pendingVerificationConfirmed, isTrue);
+      // Not sent to the sign-in form, which the API would answer 403.
+      expect(controller.pendingVerificationEmail, isNotNull);
+    });
+
+    test('keeps the waiting screen when the code is refused', () async {
+      // The wrong code belongs to this attempt, not to the session. Being thrown
+      // onto the sign-in form would hide the message explaining why.
+      final AuthController controller = controllerOver((http.Request request) async {
+        if (request.url.path.endsWith('/register')) {
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(status: 'PENDING_VERIFICATION'),
+                'tokens': null,
+                'verificationRequired': true,
+              },
+            }),
+            201,
+            headers: <String, String>{'content-type': 'application/json'},
+          );
+        }
+
+        return http.Response(
+          jsonEncode(<String, Object?>{
+            'error': <String, Object?>{
+              'code': 'TOKEN_INVALID',
+              'message': 'Verification code is invalid or has expired.',
+              'correlationId': 'd1d1d1d1-0000-4000-8000-000000000009',
+            },
+          }),
+          401,
+          headers: <String, String>{'content-type': 'application/json'},
+        );
+      });
+
+      await controller.register(
+        email: 'new@deliveryuy.local',
+        password: 'a-long-enough-one',
+      );
+      await controller.confirmEmail('vt_wrong');
+
+      expect(controller.status, AuthStatus.awaitingVerification);
+      expect(controller.pendingVerificationConfirmed, isFalse);
+      expect(controller.failureKind, AuthFailureKind.rejected);
+      expect(controller.failureCode, 'TOKEN_INVALID');
+      expect(controller.failureCorrelationId, 'd1d1d1d1-0000-4000-8000-000000000009');
+    });
+
+    test('reports an unreachable server without leaving the waiting screen', () async {
+      final AuthController controller = controllerOver((http.Request request) async {
+        if (request.url.path.endsWith('/register')) {
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(status: 'PENDING_VERIFICATION'),
+                'tokens': null,
+                'verificationRequired': true,
+              },
+            }),
+            201,
+            headers: <String, String>{'content-type': 'application/json'},
+          );
+        }
+
+        throw http.ClientException('connection closed');
+      });
+
+      await controller.register(
+        email: 'new@deliveryuy.local',
+        password: 'a-long-enough-one',
+      );
+      await controller.confirmEmail('vt_abc123');
+
+      expect(controller.status, AuthStatus.awaitingVerification);
+      expect(controller.failureKind, AuthFailureKind.unreachable);
+    });
+
+    test('sends nothing for an empty code', () async {
+      final AuthController controller = await pendingAccount();
+      final int before = sent.length;
+
+      await controller.confirmEmail('   ');
+
+      expect(sent, hasLength(before));
+      expect(controller.status, AuthStatus.awaitingVerification);
+    });
+
+    test('ignores a second tap while a code is in flight', () async {
+      final Completer<void> gate = Completer<void>();
+      final List<http.Request> requests = <http.Request>[];
+
+      final AuthController controller = controllerOver((http.Request request) async {
+        requests.add(request);
+
+        if (request.url.path.endsWith('/register')) {
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(status: 'PENDING_VERIFICATION'),
+                'tokens': null,
+                'verificationRequired': true,
+              },
+            }),
+            201,
+            headers: <String, String>{'content-type': 'application/json'},
+          );
+        }
+
+        await gate.future;
+
+        return http.Response(
+          jsonEncode(<String, Object?>{
+            'data': <String, Object?>{'verified': true, 'canSignIn': true},
+          }),
+          200,
+          headers: <String, String>{'content-type': 'application/json'},
+        );
+      });
+
+      await controller.register(
+        email: 'new@deliveryuy.local',
+        password: 'a-long-enough-one',
+      );
+
+      final Future<void> first = controller.confirmEmail('vt_one');
+      await controller.confirmEmail('vt_two');
+
+      gate.complete();
+      await first;
+
+      expect(requests.where((http.Request r) => r.url.path.endsWith('/verify-email')), hasLength(1));
+      expect(controller.status, AuthStatus.signedOut);
+    });
+  });
+
   group('clearFailure', () {
     test('forgets the last failure and notifies once', () async {
       final AuthController controller = controllerOver(

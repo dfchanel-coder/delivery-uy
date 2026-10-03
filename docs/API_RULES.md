@@ -157,8 +157,16 @@ On top of authentication, a route declares what it needs:
 | `POST /api/v1/auth/logout` | a client without a valid session must still be able to close it |
 | `POST /api/v1/auth/password/forgot` | the account may not exist |
 | `POST /api/v1/auth/password/reset` | the reset token is the credential |
+| `POST /api/v1/auth/verify-email` | the verification code is the credential |
 
 Anything not on this list requires a bearer token.
+
+`POST /auth/verify-email` answers `200` with `{ verified, canSignIn }`. Those are
+two facts, not one: a deployment may hold a proven address for approval, and a
+client that is told only `verified: true` would then present a sign-in form that
+cannot work. A code that is unknown, expired, already used or issued under a
+different purpose answers `401 TOKEN_INVALID` - one answer for all four, so the
+response reveals nothing about which.
 
 ---
 

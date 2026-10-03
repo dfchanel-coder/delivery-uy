@@ -26,7 +26,7 @@ export interface AuthenticatedUser {
   roles: readonly string[];
   locale: string;
   currency?: CurrencyCode;
-  /** Null until email verification is delivered (notification phase pending). */
+  /** Null until the address is verified, which requires a delivered code. */
   emailVerifiedAt: IsoDateTime | null;
   mustChangePassword: boolean;
   createdAt: IsoDateTime;
@@ -56,6 +56,19 @@ export interface RegisterResponse {
 
 export interface PasswordRecoveryResult {
   status: 'reset';
+}
+
+/**
+ * Answer to a successful address verification.
+ *
+ * `canSignIn` is separate from `verified` because the two are different facts. A
+ * deployment can require verification *and* an administrator approval, in which
+ * case the address is proven and the account is still not usable. Reporting only
+ * `verified` would leave a client showing a sign-in form that cannot work.
+ */
+export interface EmailConfirmationResult {
+  verified: boolean;
+  canSignIn: boolean;
 }
 
 export interface SessionSummary {

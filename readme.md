@@ -111,9 +111,48 @@ pnpm dev:admin                # http://localhost:4000 (needs the API running)
 
 `pnpm db:seed` requires the eight `SEED_*` credentials from `.env`: it creates
 one account per role family (`ADMIN`, `MERCHANT`, `DRIVER`, `CUSTOMER`) so a
-login can be exercised, and it refuses to invent a password. Change
-`SEED_*_PASSWORD` in `.env` before seeding anywhere you care about. The script
+login can be exercised, and it refuses to invent a password. The script
 refuses to run when `APP_ENV` or `NODE_ENV` is `production`.
+
+The accounts it creates are exactly the ones in `.env` - nothing is hardcoded:
+
+| Role | Variables | Notes |
+| --- | --- | --- |
+| `ADMIN` | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` | `admin@deliveryuy.local` in `.env.example` |
+| `MERCHANT` | `SEED_MERCHANT_EMAIL`, `SEED_MERCHANT_PASSWORD` | `merchant@deliveryuy.local` |
+| `DRIVER` | `SEED_DRIVER_EMAIL`, `SEED_DRIVER_PASSWORD` | `driver@deliveryuy.local` |
+| `CUSTOMER` | `SEED_CUSTOMER_EMAIL`, `SEED_CUSTOMER_PASSWORD` | `customer@deliveryuy.local` |
+
+`.env.example` ships `CHANGE_ME` for every password on purpose: there is no
+default to forget, and the seed fails loudly rather than creating an account
+whose credentials are published in the repository. Change
+`SEED_*_PASSWORD` before seeding anywhere you care about. These are
+development bootstrap credentials and nothing else - the seed is not a
+production data set, and no seeded account carries a role beyond the one its
+variable names.
+
+Email delivery:
+
+```bash
+NOTIFICATION_PROVIDER=smtp         # or "none", which refuses to pretend
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587                      # 587 = STARTTLS, 465 = implicit TLS
+SMTP_FROM=no-reply@deliveryuy.example
+SMTP_USER=apikey
+SMTP_PASSWORD=secret
+REQUIRE_EMAIL_VERIFICATION=false   # true needs a real provider; the schema refuses "none"
+```
+
+`SMTP_REQUIRE_TLS` defaults to `true` and must stay that way outside
+development: the messages carry a password-reset code and a verification
+code, which are bearer credentials. Turning it off is only for a local sink
+such as Mailpit on a laptop. `EMAIL_VERIFICATION_TTL_HOURS` (default 24) and
+`ACCOUNT_APPROVAL_REQUIRED` (default `false`) control whether proving an
+address is what makes an account usable, or whether it must also be approved.
+
+The messages carry a **code to type in the application**, not a link. A link
+would need deep-link routing the applications do not have yet, and a link that
+opens nothing is worse than an honest instruction.
 
 Mobile applications:
 
@@ -141,7 +180,7 @@ pnpm run verify:all           # both gates
 Documentation:
 
 - `docs/TESTING.MD` - test layers and how to run them
-- `docs/decisions/` - accepted architecture decisions (ADR-001 ... ADR-019)
+- `docs/decisions/` - accepted architecture decisions (ADR-001 ... ADR-022)
 - `SECURITY.md`, `DATABASE.md`, `LEGAL.md` - non-negotiable constraints
 - `packages/database/README.md` - schema, migration and seed commands
 

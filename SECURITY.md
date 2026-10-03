@@ -43,8 +43,45 @@ Support token/session revocation.
   replay. Replay revokes the entire family and raises a `RiskEvent`.
 - Password recovery tokens behave the same way: single use, enforced by a
   conditional update, and they revoke every existing session on completion.
+- Address-verification codes are opaque, single use and expire, and only their
+  SHA-256 hash is stored. Issuing a new one invalidates any outstanding code for
+  the same account, so "this is the only code that works" is true.
+- A code is part of the lookup, not just a column. `EMAIL_VERIFY` and
+  `EMAIL_CHANGE` are both opaque values hashed into the same table, so redeeming
+  one must not satisfy the other.
+- Activation after verification only moves a `PENDING_VERIFICATION` account
+  forward. A code that arrives after an administrator suspended or disabled an
+  account records the proof of the address and leaves the status alone, so a
+  public endpoint cannot undo an administrative decision.
 - `POST /auth/logout-all` revokes every session of the authenticated caller and
   answers with the number of sessions closed.
+
+### Delivery of codes
+
+The codes above reach the customer by email. That channel has its own rules:
+
+- The plaintext exists in exactly two places: the delivery message and the
+  customer's inbox. Nothing else - not the database, not the API response, not a
+  log line - may carry it. The global redaction allowlist covers `token`,
+  `verificationCode` and `smtpPassword`.
+- A delivery failure never fails the operation it belongs to. A password reset
+  completes server-side even when the mail host is down; otherwise an SMTP
+  outage would let anyone invalidate every account's recovery code on demand
+  (AGENTS.md section 23). The failure is recorded, not propagated.
+- `Message-ID` is `sha256(idempotencyKey)`, never the key itself. The header
+  crosses the internet and is quoted verbatim in bounces and DMARC reports.
+- SMTP credentials require TLS. `SMTP_REQUIRE_TLS` defaults to `true` and the
+  schema refuses `false` in staging/production and whenever `SMTP_USER` is set;
+  `NodemailerMailTransport` refuses it again in its constructor so the guarantee
+  does not depend on that schema being the only caller. Port 587 with
+  `secure: false` is STARTTLS and is the supported submission path.
+- `NOTIFICATION_PROVIDER=none` refuses every send and says so, rather than
+  accepting a message it cannot deliver. A recovery request against it still
+  succeeds and still produces a valid code - turning a provider on changes
+  delivery and nothing else.
+- The messages carry a code to type in, not a link. A link requires deep-link
+  routing that does not exist yet, and the copy never asks for a password to be
+  replied with.
 
 ### Access token claims
 
@@ -160,9 +197,16 @@ Limits currently in force (fixed window, `limit` per `windowSeconds`):
 | `POST /auth/logout-all` | 20 per user / 15 min |
 | `POST /auth/password/forgot` | 10 per IP / 1 h, 3 per email / 1 h |
 | `POST /auth/password/reset` | 10 per IP / 1 h |
+| `POST /auth/verify-email` | 10 per IP / 1 h |
 
 A blocked request answers `429` with `RATE_LIMITED` and
 `details: { limit, retryAfterSeconds }`, so a client backs off without guessing.
+
+`POST /auth/verify-email` is rate limited because it is public and accepts an
+opaque value: without a budget it is an oracle for guessing codes. Wrong guesses
+are also free of consequence by design - a rejected attempt does not consume the
+code the legitimate holder has, because one code is worth more than an attacker's
+attempt at a second.
 
 ---
 
@@ -324,6 +368,9 @@ Configurable through `packages/config` and validated at startup:
 | `LOGIN_LOCK_MINUTES`          | `15`    |
 | `PASSWORD_RESET_TTL_HOURS`    | `2`     |
 | `REQUIRE_EMAIL_VERIFICATION`  | `false` |
+| `ACCOUNT_APPROVAL_REQUIRED`   | `false` |
+| `EMAIL_VERIFICATION_TTL_HOURS`| `24`    |
+| `SMTP_REQUIRE_TLS`            | `true`  |
 | `REGISTER_DEFAULT_ROLE`       | `CUSTOMER` (the only accepted value) |
 | `TRUST_PROXY_HOPS`            | `0`     |
 | `RATE_LIMIT_BACKEND`          | `redis` |
@@ -339,9 +386,20 @@ Rules:
 - `REGISTER_DEFAULT_ROLE` accepts only `CUSTOMER`. The schema cannot express
   `ADMIN` or `MERCHANT`, so self-registration can never grant an elevated role
   even by misconfiguration (AGENTS.md section 8);
+- `REQUIRE_EMAIL_VERIFICATION` and `ACCOUNT_APPROVAL_REQUIRED` are separate
+  decisions. The first says an address must be proven; the second says that
+  proving it is not enough on its own. With the second on, a proven address
+  leaves the account `PENDING_VERIFICATION` and the API answers
+  `canSignIn: false` rather than presenting an account the customer cannot use.
+  A deployment that turns it on is responsible for having an approval path;
+  the configuration cannot detect its absence;
 - `REQUIRE_EMAIL_VERIFICATION=true` is rejected when
   `NOTIFICATION_PROVIDER=none`, because accounts would never receive the
   verification or recovery message;
+- `NOTIFICATION_PROVIDER=smtp` requires `SMTP_HOST`, `SMTP_PORT` and
+  `SMTP_FROM`; `SMTP_USER` and `SMTP_PASSWORD` must be set together; credentials
+  are refused on any port other than 465/587; and `SMTP_REQUIRE_TLS=false` is
+  refused outside development and whenever `SMTP_USER` is set;
 - `TRUST_PROXY_HOPS` is the number of reverse proxies the deployment actually
   declares. It must stay `0` behind no proxy: setting it blindly lets any caller
   forge the `X-Forwarded-For` address used by rate limits and audit records.
@@ -448,14 +506,48 @@ Written and passing locally:
 - the configuration schema refuses `REGISTER_DEFAULT_ROLE=ADMIN` or `=MERCHANT`
   (`packages/config`), which is what makes role escalation from a public route
   impossible rather than merely unlikely;
-- RBAC (`packages/auth`, 7 tests) - the permission matrix.
+- RBAC (`packages/auth`, 7 tests) - the permission matrix;
+- `packages/notifications` (26 tests) - the SMTP provider refusing to pretend, a
+  delivery failure resolving with `accepted: false` instead of throwing, template
+  resolution across `es`/`pt` including the fallback chain, strict interpolation
+  refusing both a missing and a surplus value, HTML escaping, a UTC date that
+  survives an invalid locale, the `Message-ID` being a hash rather than the key,
+  and the credentials-over-plaintext refusals;
+- email verification through HTTP (5 tests) - the account stays pending until the
+  code is proven, `canSignIn` distinguishing "proven" from "usable", a code
+  refused twice, a code that was never issued, and `400` for a malformed body;
+- `AuthService` verification and activation - proving an address activates it
+  unless `ACCOUNT_APPROVAL_REQUIRED`, a suspended account is never resurrected
+  through the public endpoint, and a provider that refuses the message still
+  leaves a valid account behind.
 
 Verified against real infrastructure (PostgreSQL 16 and Redis 7 outside the
 repository; see `PROJECT_STATE.md` BLOCKED):
 
-- the four Prisma adapters of the auth module (`*.integration.spec.ts`);
+- the five Prisma adapters of the auth module (`*.integration.spec.ts`),
+  including the verification-token adapter: a code is single use under two
+  simultaneous redemptions, a code presented under the wrong `type` does not
+  satisfy the check and does not burn the real one, an expired code is refused
+  without being marked used, and `invalidateForUser` touches only the requested
+  kind and only one account;
+- activation after verification leaving a `SUSPENDED` and a `DISABLED` account
+  exactly as they were, while still recording the proof of the address;
 - the Redis rate limiter, including failing closed when Redis is unreachable
   (`redis-rate-limiter.integration.spec.ts`).
+
+Verified manually against a real SMTP conversation (a local sink outside the
+repository, not a committed fixture):
+
+- both messages delivered as MIME with the right sender, subject, recipients and
+  a `Message-ID` that is a hash rather than the token;
+- the boot-time provider `verify()` reporting the host reachable;
+- a full verification round trip: register (pending, no session) -> login refused
+  with `403 EMAIL_NOT_VERIFIED` -> the code from the delivered message ->
+  `POST /auth/verify-email` answering `verified: true, canSignIn: true` -> login
+  succeeding -> the same code refused a second time;
+- a full recovery round trip: request -> the code from the delivered message ->
+  reset -> login with the new password -> the same code refused a second time;
+- no plaintext code present in any log line.
 
 Still unverified: the same suite running inside the CI `integration` job, which
 is the only place the compose files themselves are exercised.

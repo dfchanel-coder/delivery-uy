@@ -295,6 +295,43 @@ describe('PrismaUserRepository (integration)', () => {
     });
   });
 
+  it('never lifts a suspension or a disablement when activating', async (ctx) => {
+    await withDatabase(ctx, async (client) => {
+      const repository = new PrismaUserRepository(client);
+      const suspended = await seedUser(client, {
+        email: 'verify-suspended@example.com',
+        status: 'SUSPENDED',
+      });
+      const disabled = await seedUser(client, {
+        email: 'verify-disabled@example.com',
+        status: 'DISABLED',
+      });
+      const now = new Date('2026-05-02T09:30:00.000Z');
+
+      // A verification code can arrive after an administrator acted. Without the
+      // status guard in the activation statement, a public endpoint would be a
+      // way around suspending an account.
+      await repository.markEmailVerified({ userId: suspended, now, activate: true });
+      await repository.markEmailVerified({ userId: disabled, now, activate: true });
+
+      expect((await repository.findById(suspended))?.status).toBe('SUSPENDED');
+      expect((await repository.findById(disabled))?.status).toBe('DISABLED');
+
+      // The proof is still recorded: the address was proven either way, and the
+      // record is what an administrator reads later.
+      const rows = await client.user.findMany({
+        where: { id: { in: [suspended, disabled] } },
+        select: { emailVerifiedAt: true },
+      });
+
+      expect(rows).toHaveLength(2);
+
+      for (const row of rows) {
+        expect(row.emailVerifiedAt?.toISOString()).toBe(now.toISOString());
+      }
+    });
+  });
+
   it('finds an account by identifier and reports null for an unknown one', async (ctx) => {
     await withDatabase(ctx, async (client) => {
       const repository = new PrismaUserRepository(client);

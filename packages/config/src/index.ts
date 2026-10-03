@@ -1,6 +1,7 @@
 export {
   ConfigurationError,
   appEnvSchema,
+  environmentKeys,
   environmentSchema,
   loadConfig,
   toAppConfig,

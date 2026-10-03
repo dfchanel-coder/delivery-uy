@@ -265,6 +265,43 @@ class AuthRegistration {
       : AuthSession(user: user, tokens: tokens!);
 }
 
+/// The answer to proving an email address.
+///
+/// Two facts, not one. A deployment may hold a proven address for approval, so
+/// [verified] alone would leave a client presenting a sign-in form that cannot
+/// work. They are decoded as separate booleans and neither is inferred from the
+/// other, exactly as the API reports them.
+class EmailConfirmation {
+  /// Creates a confirmation result from decoded fields.
+  const EmailConfirmation({required this.verified, required this.canSignIn});
+
+  /// Decodes the `data` member of a verify-email response.
+  factory EmailConfirmation.fromJson(Object? json) {
+    if (json is! Map<String, Object?>) {
+      throw const FormatException('verify-email response must be an object');
+    }
+
+    final Object? verified = json['verified'];
+    final Object? canSignIn = json['canSignIn'];
+
+    if (verified is! bool) {
+      throw const FormatException('verify-email.verified must be a boolean');
+    }
+
+    if (canSignIn is! bool) {
+      throw const FormatException('verify-email.canSignIn must be a boolean');
+    }
+
+    return EmailConfirmation(verified: verified, canSignIn: canSignIn);
+  }
+
+  /// Whether the code proved the address.
+  final bool verified;
+
+  /// Whether the account may now sign in.
+  final bool canSignIn;
+}
+
 /// The authentication endpoints, as one call each.
 ///
 /// Every method either returns a decoded value or throws
@@ -340,5 +377,21 @@ class AuthApi {
     );
 
     return AuthUser.fromJson(data);
+  }
+
+  /// Proves an address with the code carried by the delivery message.
+  ///
+  /// Public: the code is the credential, and no session exists yet to present
+  /// (docs/API_RULES.md). The code is single use, so a retry after a timeout is
+  /// refused rather than silently harmless - the caller should send the customer
+  /// back to the beginning of the message rather than expect the same code to
+  /// work twice.
+  Future<EmailConfirmation> verifyEmail(String token) async {
+    final Object? data = await _client.post(
+      '/auth/verify-email',
+      body: <String, String>{'token': token.trim()},
+    );
+
+    return EmailConfirmation.fromJson(data);
   }
 }

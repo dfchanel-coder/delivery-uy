@@ -298,6 +298,40 @@ void main() {
       );
     });
 
+    test('verifyEmail posts the code and reads both facts of the answer', () async {
+      // "Proven" and "usable" are separate, so a deployment that requires
+      // approval is representable instead of collapsing into one flag.
+      final AuthApi api = apiReturning(<String, Object?>{
+        'verified': true,
+        'canSignIn': false,
+      });
+
+      final EmailConfirmation confirmation = await api.verifyEmail('  vt_abc123  ');
+
+      expect(sent.single.method, 'POST');
+      expect(sent.single.url.path, '/api/v1/auth/verify-email');
+      expect(jsonDecode(sent.single.body), <String, Object?>{'token': 'vt_abc123'});
+      // Public route: the code is the credential, so no bearer token is sent.
+      expect(sent.single.headers.containsKey('authorization'), isFalse);
+      expect(confirmation.verified, isTrue);
+      expect(confirmation.canSignIn, isFalse);
+    });
+
+    test('rejects a verify-email answer that omits one of the two facts', () async {
+      final AuthApi api = apiReturning(<String, Object?>{'verified': true});
+
+      await expectLater(
+        api.verifyEmail('vt_abc123'),
+        throwsA(
+          isA<FormatException>().having(
+            (FormatException error) => error.message,
+            'message',
+            contains('canSignIn'),
+          ),
+        ),
+      );
+    });
+
     test('surfaces the API failure code from a rejected login', () async {
       final AuthApi api = AuthApi(
         ApiClient(

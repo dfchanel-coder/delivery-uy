@@ -428,6 +428,174 @@ void main() {
     expect(_submit('Ingresar'), findsOneWidget);
   });
 
+  testWidgets('el código verificado devuelve al ingreso', (WidgetTester tester) async {
+    final List<http.Request> sent = <http.Request>[];
+    await tester.pumpWidget(
+      _appOver(
+        _apiOver((http.Request request) async {
+          sent.add(request);
+
+          if (request.url.path.endsWith('/auth/verify-email')) {
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'data': <String, Object?>{'verified': true, 'canSignIn': true},
+              }),
+              200,
+              headers: <String, String>{'content-type': 'application/json'},
+            );
+          }
+
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(status: 'PENDING_VERIFICATION'),
+                'tokens': null,
+                'verificationRequired': true,
+              },
+            }),
+            201,
+            headers: <String, String>{'content-type': 'application/json'},
+          );
+        }),
+      ),
+    );
+
+    await openSignUp(tester);
+    await fillSignUp(tester);
+    expect(find.text('Tu cuenta está pendiente de verificación'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextFormField), 'vt_abc123');
+    await tester.tap(_submit('Verificar código'));
+    await tester.pumpAndSettle();
+
+    expect(sent.last.url.path, '/api/v1/auth/verify-email');
+    expect(_submit('Ingresar'), findsOneWidget);
+    // The code is not left on the screen for a second, already spent attempt.
+    expect(find.text('vt_abc123'), findsNothing);
+  });
+
+  testWidgets('un código rechazado deja al usuario donde puede corregirlo', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      _appOver(
+        _apiOver((http.Request request) async {
+          if (request.url.path.endsWith('/auth/verify-email')) {
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'error': <String, Object?>{
+                  'code': 'TOKEN_INVALID',
+                  'message': 'Verification code is invalid or has expired.',
+                },
+              }),
+              401,
+              headers: <String, String>{'content-type': 'application/json'},
+            );
+          }
+
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(status: 'PENDING_VERIFICATION'),
+                'tokens': null,
+                'verificationRequired': true,
+              },
+            }),
+            201,
+            headers: <String, String>{'content-type': 'application/json'},
+          );
+        }),
+      ),
+    );
+
+    await openSignUp(tester);
+    await fillSignUp(tester);
+    await tester.enterText(find.byType(TextFormField), 'vt_mal');
+    await tester.tap(_submit('Verificar código'));
+    await tester.pumpAndSettle();
+
+    // A wrong guess is not a lost session: the code field is still there.
+    expect(find.text('Tu cuenta está pendiente de verificación'), findsOneWidget);
+    expect(find.text('Verification code is invalid or has expired.'), findsOneWidget);
+    expect(_submit('Verificar código'), findsOneWidget);
+  });
+
+  testWidgets('verificado pero sin aprobación no promete ingreso', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      _appOver(
+        _apiOver((http.Request request) async {
+          if (request.url.path.endsWith('/auth/verify-email')) {
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'data': <String, Object?>{'verified': true, 'canSignIn': false},
+              }),
+              200,
+              headers: <String, String>{'content-type': 'application/json'},
+            );
+          }
+
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(status: 'PENDING_VERIFICATION'),
+                'tokens': null,
+                'verificationRequired': true,
+              },
+            }),
+            201,
+            headers: <String, String>{'content-type': 'application/json'},
+          );
+        }),
+      ),
+    );
+
+    await openSignUp(tester);
+    await fillSignUp(tester);
+    await tester.enterText(find.byType(TextFormField), 'vt_abc123');
+    await tester.tap(_submit('Verificar código'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Tu correo quedó verificado'), findsOneWidget);
+    expect(find.textContaining('espera una aprobación'), findsOneWidget);
+    // The code is spent; asking again would only earn another refusal.
+    expect(_submit('Verificar código'), findsNothing);
+    expect(find.byType(TextFormField), findsNothing);
+  });
+
+  testWidgets('no envía nada si el código está vacío', (WidgetTester tester) async {
+    final List<http.Request> sent = <http.Request>[];
+    await tester.pumpWidget(
+      _appOver(
+        _apiOver((http.Request request) async {
+          sent.add(request);
+
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(status: 'PENDING_VERIFICATION'),
+                'tokens': null,
+                'verificationRequired': true,
+              },
+            }),
+            201,
+            headers: <String, String>{'content-type': 'application/json'},
+          );
+        }),
+      ),
+    );
+
+    await openSignUp(tester);
+    await fillSignUp(tester);
+    final int before = sent.length;
+    await tester.tap(_submit('Verificar código'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ingresá el código del mensaje.'), findsOneWidget);
+    expect(sent, hasLength(before));
+  });
+
   testWidgets('un registro rechazado muestra los motivos del API', (
     WidgetTester tester,
   ) async {

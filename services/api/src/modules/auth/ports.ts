@@ -171,9 +171,80 @@ export interface PasswordResetTokenRepository {
  * is the same property as the customer's own screen. An implementation must
  * therefore send it and never log it, store it, or echo it back (SECURITY.md
  * "Logging"). Everywhere else only the SHA-256 hash exists.
+ *
+ * It resolves even when nothing was delivered. The caller asked to start a
+ * recovery and that part succeeded; a message that could not leave is recorded
+ * and retried by the notification layer, and failing the HTTP request would tell
+ * an honest caller something untrue (AGENTS.md section 23).
  */
 export interface PasswordRecoveryNotifier {
-  deliver(input: { userId: string; email: string; token: string; expiresAt: Date }): Promise<void>;
+  deliver(input: {
+    userId: string;
+    email: string;
+    token: string;
+    expiresAt: Date;
+    locale: string;
+  }): Promise<void>;
+}
+
+/**
+ * Delivery of the address verification message.
+ *
+ * Separate from `PasswordRecoveryNotifier` because the two carry different copy,
+ * different templates and different failure consequences. One interface with a
+ * `kind` parameter would be less code and would let a recovery message be sent
+ * for a verification, which is exactly the mix-up that locks a customer out.
+ */
+export interface EmailVerificationNotifier {
+  deliver(input: {
+    userId: string;
+    email: string;
+    token: string;
+    expiresAt: Date;
+    locale: string;
+  }): Promise<void>;
+}
+
+/** Kinds of address verification the token table holds. */
+export type VerificationTokenKind = 'EMAIL_VERIFY' | 'EMAIL_CHANGE';
+
+export interface VerificationTokenRecord {
+  readonly id: string;
+  readonly userId: string;
+  readonly destination: string;
+  readonly expiresAt: Date;
+  readonly usedAt: Date | null;
+}
+
+export interface VerificationTokenRepository {
+  /**
+   * Stores a hashed token.
+   *
+   * `destination` is the address the token proves, not the account address: a
+   * later `EMAIL_CHANGE` must be verifiable against the new address, and reading
+   * it back from the row is what stops a message about one address from
+   * activating another.
+   */
+  create(input: {
+    userId: string;
+    type: VerificationTokenKind;
+    tokenHash: string;
+    destination: string;
+    expiresAt: Date;
+    now: Date;
+  }): Promise<VerificationTokenRecord>;
+  /** Returns the token only when it is unused and unexpired. */
+  consumeByHash(input: {
+    tokenHash: string;
+    type: VerificationTokenKind;
+    now: Date;
+  }): Promise<VerificationTokenRecord | null>;
+  /** Invalidates every outstanding token of a kind for an account. */
+  invalidateForUser(input: {
+    userId: string;
+    type: VerificationTokenKind;
+    now: Date;
+  }): Promise<number>;
 }
 
 /** Client context recorded with a session. */

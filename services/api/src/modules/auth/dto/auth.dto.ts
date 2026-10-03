@@ -71,3 +71,11 @@ export class PasswordRecoveryCompleteDto {
   @MaxLength(MAX_PASSWORD_LENGTH)
   public password!: string;
 }
+
+export class VerifyEmailDto {
+  @ApiProperty({ description: 'Code from the address verification message.', writeOnly: true })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  public token!: string;
+}
