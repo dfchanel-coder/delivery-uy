@@ -80,6 +80,22 @@ function failure(body: unknown): ApiError {
   return payload;
 }
 
+/**
+ * Reads the actionable reasons out of a failure.
+ *
+ * The stringified value rather than the array, so a test that asks whether a
+ * reason is present cannot pass by matching `"[object Object]"` and a test that
+ * asks for an exact list notices a shape change.
+ */
+function reasons(error: ApiError): string[] {
+  const value = error.details?.['reasons'];
+
+  if (!Array.isArray(value))
+    throw new Error(`expected details.reasons, received ${JSON.stringify(error.details)}`);
+
+  return value.map(String);
+}
+
 interface Harness {
   app: INestApplication;
   users: InMemoryUserRepository;
@@ -157,6 +173,105 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await harness.app.close();
+});
+
+describe('the password length policy', () => {
+  // `PASSWORD_MIN_LENGTH` is a deployment setting. It used to have a second,
+  // frozen copy in the request DTOs, and the copy won: the validation pipe ran
+  // first, so an operator lowering the setting below 10 changed nothing, and one
+  // raising it above 10 left the client reading class-validator's English text
+  // instead of the `details.reasons` the clients already render. These assert the
+  // single authority, on both endpoints that accept a password.
+
+  afterEach(async () => {
+    await harness.app.close();
+  });
+
+  it('accepts a password a lowered setting allows, on register', async () => {
+    // The direction that proves the frozen floor is gone. With a `@MinLength(10)`
+    // in the pipe, a deployment configured for 8 would refuse a 9 character
+    // password: the operator's setting would be silently ignored and only the
+    // constant would apply.
+    harness = await startApp({ auth: { passwordMinLength: 8 } });
+
+    const response = await request(server())
+      .post(`${AUTH_PATH}/register`)
+      .send({ email: EMAIL, password: 'a'.repeat(9) });
+
+    expect(response.status).toBe(HttpStatus.CREATED);
+  });
+
+  it('accepts a password a lowered setting allows, on password reset', async () => {
+    // Same on the second endpoint that takes a password. A fix applied to only one
+    // of them would leave an operator with an inconsistency between the two.
+    harness = await startApp({ auth: { passwordMinLength: 8 } });
+
+    const response = await request(server())
+      .post(`${AUTH_PATH}/password/reset`)
+      .send({ token: 'pr_anything_at_all', password: 'a'.repeat(9) });
+
+    // Accepted by the policy, so it gets as far as the token: unknown, and so
+    // `TOKEN_INVALID` rather than a length complaint.
+    expect(response.status).toBe(HttpStatus.UNAUTHORIZED);
+    expect(failure(response.body).code).toBe('TOKEN_INVALID');
+  });
+
+  it('names the configured minimum when a password is too short, on register', async () => {
+    harness = await startApp({ auth: { passwordMinLength: 14 } });
+
+    const response = await request(server())
+      .post(`${AUTH_PATH}/register`)
+      .send({ email: EMAIL, password: 'a'.repeat(11) });
+
+    expect(response.status).toBe(HttpStatus.BAD_REQUEST);
+    const error = failure(response.body);
+    expect(error.code).toBe('VALIDATION_FAILED');
+    // The reason names the configured number, which is the whole point: a client
+    // can tell the user what to do without keeping its own copy of the policy.
+    expect(reasons(error)).toContain('password must be at least 14 characters');
+  });
+
+  it('names the configured minimum when a password is too short, on password reset', async () => {
+    harness = await startApp({ auth: { passwordMinLength: 14 } });
+
+    const response = await request(server())
+      .post(`${AUTH_PATH}/password/reset`)
+      .send({ token: 'pr_anything_at_all', password: 'a'.repeat(11) });
+
+    expect(response.status).toBe(HttpStatus.BAD_REQUEST);
+    // Checked before the token is looked up, so the reason is the policy and not
+    // `TOKEN_INVALID` - which is what makes this a test of the password check.
+    expect(reasons(failure(response.body))).toContain('password must be at least 14 characters');
+  });
+
+  it('still enforces the default minimum', async () => {
+    // The other half: removing the pipe's copy must not have removed the check
+    // itself. Ten characters is what the default policy permits, five is not.
+    const allowed = await request(server())
+      .post(`${AUTH_PATH}/register`)
+      .send({ email: EMAIL, password: 'a'.repeat(10) });
+    const refused = await request(server())
+      .post(`${AUTH_PATH}/register`)
+      .send({ email: 'other@example.com', password: 'a'.repeat(5) });
+
+    expect(allowed.status).toBe(HttpStatus.CREATED);
+    expect(refused.status).toBe(HttpStatus.BAD_REQUEST);
+    expect(reasons(failure(refused.body))).toEqual(['password must be at least 10 characters']);
+  });
+
+  it('reports the failure in the shape the clients parse', async () => {
+    const response = await request(server())
+      .post(`${AUTH_PATH}/register`)
+      .send({ email: EMAIL, password: 'short' });
+
+    expect(response.status).toBe(HttpStatus.BAD_REQUEST);
+    const error = failure(response.body);
+    // Not class-validator's text. The client renders `details.reasons` and shows
+    // the message as written here, so which layer refused decides what the person
+    // reads.
+    expect(error.message).toBe('Password does not meet the requirements.');
+    expect(reasons(error)).toEqual(['password must be at least 10 characters']);
+  });
 });
 
 describe('POST /auth/register', () => {

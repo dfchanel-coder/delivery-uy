@@ -39,11 +39,13 @@
  * passed, so a partial run can never be mistaken for a full one.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
+import { parse } from 'yaml';
 
 /** The repository root, from this file's own location. */
 const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -107,6 +109,131 @@ function nodeScript(script, args = []) {
   return run(process.execPath, [join(repositoryRoot, script), ...args], { quiet: true });
 }
 
+/**
+ * The images the test compose file pins, read from the file rather than repeated.
+ *
+ * The point of reading them is that the warning below cannot rot. A copy of the
+ * tags inside this script would keep comparing against a version nobody runs any
+ * more, and would go on reporting a match after the pins moved.
+ */
+function readReferenceImages() {
+  const composePath = join(repositoryRoot, 'infrastructure', 'docker', 'docker-compose.test.yml');
+
+  if (!existsSync(composePath)) {
+    return {};
+  }
+
+  const compose = parse(readFileSync(composePath, 'utf8'));
+  const services = compose?.services ?? {};
+
+  return Object.fromEntries(
+    Object.entries(services)
+      .filter(([, service]) => typeof service?.image === 'string')
+      .map(([name, service]) => [name, service.image]),
+  );
+}
+
+/**
+ * The major version an image reference asks for.
+ *
+ * A major-version tag such as the PostgreSQL 16 or the Redis 7 one is compared by
+ * major number, so this reports what the file means rather than the exact tag.
+ * Anything it cannot read is returned as null and simply produces no verdict,
+ * because a warning nobody can act on is worse than none.
+ */
+function referenceMajor(image) {
+  const match = /^[a-z0-9._/-]+:(\d+)/i.exec(image ?? '');
+
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * Asks the live PostgreSQL for its version.
+ *
+ * Uses the generated client rather than a second driver: it is already a
+ * dependency of this repository, and a verification script that installs its own
+ * database client would be verifying a different stack from the application's.
+ */
+async function postgresVersion() {
+  const { createDatabaseClient } = await import('@deliveryuy/database');
+  const client = createDatabaseClient({ url: process.env.DATABASE_URL });
+
+  try {
+    const rows = await client.$queryRawUnsafe('SHOW server_version');
+
+    return String(rows[0]?.server_version ?? '').trim() || null;
+  } finally {
+    // A client whose engine never connected still has to be told to stop; that
+    // call can itself throw, and the version is only a report.
+    await client.$disconnect().catch(() => {});
+  }
+}
+
+/**
+ * Asks the live Redis for its version, speaking RESP over a plain socket.
+ *
+ * Hand-rolled on purpose. A client library would be a new dependency in the root
+ * workspace for one `INFO server` call, and the server has no authentication in
+ * the test topology, so there is nothing to negotiate.
+ */
+function redisVersion() {
+  return new Promise((resolve) => {
+    const url = new URL(process.env.REDIS_URL);
+    const socket = connect({
+      host: url.hostname,
+      port: Number(url.port || 6379),
+    });
+
+    const finish = (value) => {
+      socket.destroy();
+      resolve(value);
+    };
+
+    socket.setTimeout(5000, () => finish(null));
+    socket.on('error', () => finish(null));
+    socket.on('connect', () => {
+      // RESP is a flat array of bulk strings, so this can be built without a
+      // serializer: `INFO server` returns one bulk string to parse.
+      socket.write('*2\r\n$4\r\nINFO\r\n$6\r\nserver\r\n');
+    });
+
+    let received = '';
+    socket.on('data', (chunk) => {
+      received += chunk.toString();
+
+      if (!received.includes('\r\n')) return;
+
+      const version = /^redis_version:([^\r]+)/m.exec(received)?.[1];
+
+      finish(version ? version.trim() : null);
+    });
+  });
+}
+
+/**
+ * Reports how a live server compares with the image compose pins for it.
+ *
+ * A mismatch is a warning, never a failure: the suites may well pass, and
+ * failing here would be a claim about compatibility that this script cannot
+ * establish. What it does is refuse to let a run be read as proof against the
+ * reference versions when it was not (docs/TESTING.MD).
+ */
+function describe(referenceImage, liveVersion) {
+  if (referenceImage === undefined || liveVersion === null) return '';
+
+  const expected = referenceMajor(referenceImage);
+  const actual = referenceMajor(liveVersion);
+
+  if (expected === null || actual === null || expected === actual) {
+    return ` (compose pins ${referenceImage})`;
+  }
+
+  return (
+    ` (compose pins ${referenceImage}: major ${expected}, this is major ${actual})` +
+    ' - WARNING: not proven against the reference version; see docs/TESTING.MD'
+  );
+}
+
 async function step(index, title, body) {
   const descriptor = STEPS[index - 1];
 
@@ -165,7 +292,15 @@ async function verifyIntegrationSuite() {
   if (report.code !== 0) fail(`the suite proved nothing:\n${report.output}`);
 }
 
-async function waitForLiveness(baseUrl, attempts = 30) {
+/**
+ * Waits for the API to start answering liveness.
+ *
+ * [describe] is called with the child's output only when the wait fails, and it is
+ * what makes this failure diagnosable: a refused bind, a missing variable or a
+ * schema violation all show up in the API's own log, and without it a thirty
+ * second wait reports nothing except that something did not happen.
+ */
+async function waitForLiveness(baseUrl, describe, attempts = 30) {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const response = await fetch(`${baseUrl}/api/v1/health/live`);
@@ -178,7 +313,10 @@ async function waitForLiveness(baseUrl, attempts = 30) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
-  fail(`the API never answered ${baseUrl}/api/v1/health/live after ${attempts}s`);
+  fail(
+    `the API never answered ${baseUrl}/api/v1/health/live after ${attempts}s.\n` +
+      `What it printed before giving up:\n${describe()}`,
+  );
 }
 
 async function verifyHealthProbes() {
@@ -211,7 +349,7 @@ async function verifyHealthProbes() {
   };
 
   try {
-    await waitForLiveness(baseUrl);
+    await waitForLiveness(baseUrl, () => output.trim() || '(nothing)');
 
     // Readiness is the criterion that needs infrastructure: it reports the
     // database and the cache individually, and answers 503 when either is down.
@@ -266,16 +404,7 @@ async function main() {
   }
 
   const workspace = mkdtempSync(join(tmpdir(), 'deliveryuy-verify-'));
-
-  console.log(`PostgreSQL: ${new URL(process.env.DATABASE_URL).host}`);
-  console.log(`Redis:      ${process.env.REDIS_URL}`);
-
-  // Printed because step 6 can fail on the budget alone: the probe opens its own
-  // client, so a host where connecting is slow needs a larger
-  // `HEALTH_CHECK_TIMEOUT_MS` than the default.
-  console.log(
-    `Health:     ${process.env.HEALTH_CHECK_TIMEOUT_MS ?? 'default (2000 ms)'} per dependency`,
-  );
+  const references = readReferenceImages();
 
   try {
     if (from <= 1) {
@@ -285,6 +414,34 @@ async function main() {
         if (result.code !== 0) fail('prisma generate failed');
       });
     }
+
+    // After `prisma generate`, never before it. Reading the PostgreSQL version
+    // opens a Prisma client, and `generate` renames the query engine on disk to
+    // replace it. On Windows a loaded engine cannot be renamed, so probing first
+    // makes step 1 fail with EPERM against a file this script itself was
+    // holding - the tool breaking the criterion it exists to check.
+    const [postgres, redis] = await Promise.all([postgresVersion(), redisVersion()]);
+
+    // The versions, not just the endpoints. "Real PostgreSQL and Redis" is a claim
+    // about the servers, and a hostname says nothing about which servers those
+    // were: the limiter's Lua script is proven against whatever answered. A reader
+    // comparing this output with the compose file can now see the difference instead
+    // of having to take the word of whoever pasted it.
+    console.log(
+      `PostgreSQL: ${postgres ?? 'unknown'} at ${new URL(process.env.DATABASE_URL).host}` +
+        describe(references.postgres, postgres),
+    );
+    console.log(
+      `Redis:      ${redis ?? 'unknown'} at ${process.env.REDIS_URL}` +
+        describe(references.redis, redis),
+    );
+
+    // Printed because step 6 can fail on the budget alone: the probe opens its own
+    // client, so a host where connecting is slow needs a larger
+    // `HEALTH_CHECK_TIMEOUT_MS` than the default.
+    console.log(
+      `Health:     ${process.env.HEALTH_CHECK_TIMEOUT_MS ?? 'default (2000 ms)'} per dependency`,
+    );
 
     if (from <= 2) {
       await step(2, 'prisma migrate deploy', async () => {

@@ -302,6 +302,59 @@ class EmailConfirmation {
   final bool canSignIn;
 }
 
+/// The answer to a password recovery request.
+///
+/// Carries no information beyond the acknowledgement, and that is the point: the
+/// API answers the same way for a registered address and for one that does not
+/// exist, so a client that decoded a "we found your account" flag would be
+/// decoding an account enumerator. The value of `status` is checked rather than
+/// stored, so a renamed field raises here instead of being read as success.
+class PasswordRecoveryAccepted {
+  /// Creates the acknowledgement from its decoded parts.
+  const PasswordRecoveryAccepted();
+
+  /// Decodes the `data` member of a password/forgot response.
+  factory PasswordRecoveryAccepted.fromJson(Object? json) {
+    if (json is! Map<String, Object?>) {
+      throw const FormatException('password/forgot response must be an object');
+    }
+
+    if (json['status'] != 'accepted') {
+      throw FormatException(
+        'password/forgot.status must be "accepted", got ${json['status']}',
+      );
+    }
+
+    return const PasswordRecoveryAccepted();
+  }
+}
+
+/// The answer to a completed password reset.
+///
+/// The API returns no credentials: a reset revokes every existing session,
+/// precisely because a reset exists when the old password may be known to
+/// someone else. Issuing a session here would undo that, so the person has to
+/// sign in again with the new password (SECURITY.md).
+class PasswordRecoveryResult {
+  /// Creates the result from its decoded parts.
+  const PasswordRecoveryResult();
+
+  /// Decodes the `data` member of a password/reset response.
+  factory PasswordRecoveryResult.fromJson(Object? json) {
+    if (json is! Map<String, Object?>) {
+      throw const FormatException('password/reset response must be an object');
+    }
+
+    if (json['status'] != 'reset') {
+      throw FormatException(
+        'password/reset.status must be "reset", got ${json['status']}',
+      );
+    }
+
+    return const PasswordRecoveryResult();
+  }
+}
+
 /// The authentication endpoints, as one call each.
 ///
 /// Every method either returns a decoded value or throws
@@ -393,5 +446,44 @@ class AuthApi {
     );
 
     return EmailConfirmation.fromJson(data);
+  }
+
+  /// Asks for a password recovery message.
+  ///
+  /// Public: there is no session to present, because the person asking is
+  /// precisely the one who cannot sign in (docs/API_RULES.md).
+  ///
+  /// The acknowledgement says nothing about whether the address is registered,
+  /// and a client must not turn it into a claim that a message was sent. Whether
+  /// one was sent depends on the notification provider the deployment
+  /// configures, and a person who is told "we emailed you" for an address that
+  /// does not exist learns more than the endpoint is willing to reveal.
+  Future<PasswordRecoveryAccepted> requestPasswordRecovery({
+    required String email,
+  }) async {
+    final Object? data = await _client.post(
+      '/auth/password/forgot',
+      body: <String, String>{'email': email.trim()},
+    );
+
+    return PasswordRecoveryAccepted.fromJson(data);
+  }
+
+  /// Redeems a recovery token and sets a new password.
+  ///
+  /// The token is single use and is consumed by the call, so a retry after a
+  /// timeout cannot succeed: the person needs a fresh message rather than the
+  /// same code again, and the interface has to say so instead of letting them
+  /// type it in again (SECURITY.md).
+  Future<PasswordRecoveryResult> completePasswordRecovery({
+    required String token,
+    required String password,
+  }) async {
+    final Object? data = await _client.post(
+      '/auth/password/reset',
+      body: <String, String>{'token': token.trim(), 'password': password},
+    );
+
+    return PasswordRecoveryResult.fromJson(data);
   }
 }

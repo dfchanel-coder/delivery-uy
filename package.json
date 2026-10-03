@@ -41,6 +41,7 @@
   },
   "devDependencies": {
     "@deliveryuy/config": "workspace:*",
+    "@deliveryuy/database": "workspace:*",
     "@deliveryuy/eslint-config": "workspace:*",
     "@eslint/js": "^9.17.0",
     "@types/node": "^22.10.2",

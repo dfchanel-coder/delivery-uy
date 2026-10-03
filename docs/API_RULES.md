@@ -168,6 +168,18 @@ cannot work. A code that is unknown, expired, already used or issued under a
 different purpose answers `401 TOKEN_INVALID` - one answer for all four, so the
 response reveals nothing about which.
 
+`POST /auth/password/forgot` answers `202` with `{ status: 'accepted' }` whether
+or not the address is registered, so **the acknowledgement is not a delivery
+receipt**. Two things are unknowable to a client at that moment: whether an
+account exists, and whether the configured notification provider delivered
+anything. A client that renders it as "we sent you a message" would therefore be
+stating something the endpoint never asserted, and for an unregistered address it
+would also become the account enumerator the identical answer exists to prevent.
+`POST /auth/password/reset` returns **no credentials**: a reset revokes every
+session precisely because it exists for the case where the old password may be
+known to someone else, so a client must send the person back to sign in rather
+than treat the call as a way in.
+
 ---
 
 # Documentation

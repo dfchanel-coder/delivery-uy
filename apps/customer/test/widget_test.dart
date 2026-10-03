@@ -137,6 +137,47 @@ void main() {
     expect(_submit('Ingresar'), findsOneWidget);
   });
 
+  testWidgets('la recuperación de contraseña se ofrece al ingresar, no al registrarse', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      _appOver(
+        _apiOver(
+          (_) async => http.Response(jsonEncode(<String, Object?>{'data': null}), 204),
+        ),
+      ),
+    );
+
+    expect(find.text('¿Olvidaste tu contraseña?'), findsOneWidget);
+
+    await openSignUp(tester);
+
+    // Somebody with no account has nothing to recover, and on this form the link
+    // would send them looking for a message about an address that was never
+    // registered.
+    expect(find.text('¿Olvidaste tu contraseña?'), findsNothing);
+  });
+
+  testWidgets('el enlace de recuperación abre el flujo', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      _appOver(
+        _apiOver(
+          (_) async => http.Response(jsonEncode(<String, Object?>{'data': null}), 204),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('¿Olvidaste tu contraseña?'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Recuperar contraseña'), findsOneWidget);
+    expect(_submit('Enviar mensaje'), findsOneWidget);
+    // The sign-in form is still underneath, which is where the person belongs
+    // after a completed reset. Offstage because the recovery screen covers it,
+    // hence the explicit flag.
+    expect(find.byType(AuthPage, skipOffstage: false), findsOneWidget);
+  });
+
   testWidgets('no envía nada si el correo está vacío', (WidgetTester tester) async {
     final List<http.Request> sent = <http.Request>[];
     await tester.pumpWidget(

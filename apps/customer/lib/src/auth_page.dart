@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'auth_controller.dart';
 import 'auth_forms.dart';
+import 'password_recovery.dart';
 
 /// Which form the authentication screen is showing.
 enum AuthMode {
@@ -35,6 +36,30 @@ class _AuthPageState extends State<AuthPage> {
   void _show(AuthMode mode) {
     widget.controller.clearFailure();
     setState(() => _mode = mode);
+  }
+
+  /// Opens the recovery flow as a pushed screen.
+  ///
+  /// Pushed rather than swapped in place so the sign-in form is still there
+  /// underneath, which is where the person belongs after a completed reset. The
+  /// controller is created per visit and disposed with the screen, so a token
+  /// typed into a previous attempt is not still in memory when somebody starts
+  /// over.
+  Future<void> _openPasswordRecovery() async {
+    widget.controller.clearFailure();
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => PasswordRecoveryPage(
+          controller: PasswordRecoveryController(authApi: widget.controller.authApi),
+        ),
+      ),
+    );
+
+    // Coming back after a reset means a new password now exists. The stale
+    // failure from the attempt that got here is dropped so the form is not
+    // greeting someone with the refusal from a screen they already left.
+    widget.controller.clearFailure();
   }
 
   @override
@@ -77,7 +102,14 @@ class _AuthPageState extends State<AuthPage> {
                       ),
                       const SizedBox(height: 24),
                       if (_mode == AuthMode.signIn)
-                        SignInForm(controller: widget.controller)
+                        SignInForm(
+                          controller: widget.controller,
+                          // Only offered from sign-in. Someone with no account has
+                          // nothing to recover, and on the sign-up form the link
+                          // would invite them to wait for a message about an
+                          // address that was never registered.
+                          onPasswordRecoveryRequested: _openPasswordRecovery,
+                        )
                       else
                         SignUpForm(
                           controller: widget.controller,

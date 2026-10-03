@@ -86,12 +86,23 @@ Applications (real, buildable, tested):
 - `apps/customer` - Flutter application with the authentication slice working
   end to end against the real API: `AuthController` (session state, tokens in
   memory only, `awaitingVerification` for an account the API has not enabled
-  yet) and three screens - `AuthPage` (a segmented control over `SignInForm` and
-  `SignUpForm`, a shared failure banner, no named routes), `SessionPage` and
-  `VerificationPendingPage`. A session page action calls `GET /auth/me` with the
-  access token. 21 controller tests and 13 widget tests. Cleartext HTTP is
+  yet) and four screens - `AuthPage` (a segmented control over `SignInForm` and
+  `SignUpForm`, a shared failure banner, no named routes), `SessionPage`,
+  `VerificationPendingPage` and `PasswordRecoveryPage`. A session page action calls
+  `GET /auth/me` with the access token. Cleartext HTTP is
   enabled in the **debug** manifest only, so a debug build can reach
   `http://10.0.2.2:3000`; the release manifest keeps the Android 9+ block
+  - Password recovery (closed in this slice): `PasswordRecoveryController` and
+    `PasswordRecoveryPage`, reached from "¿Olvidaste tu contraseña?" on the
+    **sign-in form only** - somebody with no account has nothing to recover, and
+    on the sign-up form the link would send them after a message about an address
+    that was never registered. Recovery is deliberately not an `AuthStatus`: the
+    API returns no credentials after a reset, so a controller treating it as a way
+    in would describe something the API does not do. The token is cleared before
+    the call that spends it and never restored, the controller keeps no copy of
+    it, a refusal keeps the person on the step they started from, and the
+    completion screen says every session was closed instead of implying they are
+    signed in
   - Registration never sends a role, and the password policy is not duplicated on
     the client: the interface repeats the `details.reasons` the API returns
     instead of keeping a length rule that could drift from
@@ -352,10 +363,12 @@ Run against a local sink outside the repository (not a committed fixture), with
 ## IN_PROGRESS
 
 - PHASE 03 - Authentication: implementation, documentation, `pnpm verify` exit 0
-  (596 unit/API tests across 22 files), the Dart gate exit 0, the integration suite
+  (612 unit/API tests across 23 files), the Dart gate exit 0, the integration suite
   against real PostgreSQL and Redis (51 executed, 0 skipped, 7 files) and a real
-  SMTP conversation for both delivered messages all pass. One item keeps the phase
-  open:
+  SMTP conversation for both delivered messages all pass. The frontend integration
+  criterion is met: every endpoint in the phase now has a screen in
+  `apps/customer`, including the password recovery flow added in this slice. The
+  only remaining item is the one no local run can settle:
   - the CI `integration` job has never run on GitHub, so the compose-based proof
     is still outstanding (see BLOCKED). No remote is configured on this
     repository.
@@ -371,10 +384,11 @@ Run against a local sink outside the repository (not a committed fixture), with
   `apps/merchant` and `apps/driver` still hold their sessions in memory only, and
   neither has a screen beyond its own placeholder: the merchant and driver
   products do not exist yet, so there is nothing for persistence to serve there
-- Password recovery has no screen anywhere yet. `POST /auth/password/forgot` and
-  `POST /auth/password/reset` work and are proven end to end, and `AuthApi` has no
-  method for them, so the customer application can neither request a reset nor
-  redeem a code. PHASE 03's backend scope is complete; the interface is not
+- Password recovery is now reachable in the customer application. `AuthApi` has
+  `requestPasswordRecovery` / `completePasswordRecovery`, and
+  `apps/customer` has the three-step flow behind a "¿Olvidaste tu contraseña?"
+  link on the sign-in form. The token is not kept in memory by the controller,
+  and no screen claims a message was sent
 
 ---
 
@@ -462,6 +476,39 @@ a wrong password returning `401` with the error envelope.
   interpolated them with defaults and no example file declared them, so an
   operator whose port was taken had a knob nobody had written down. Both are now
   in `.env.docker.example`.
+- **An undecodable API response escaped every catch in the customer controller.**
+  `AuthFailureKind.unreachable` is documented as covering "answered something
+  unreadable", but nothing produced it: strict decoding raises a
+  `FormatException`, which is not an `ApiClientException`, so it passed every
+  `on ApiClientException` and tore out of `signIn`, `register`, `confirmEmail`,
+  `ensureFreshSession` and `loadAccount` as an unhandled error, leaving the person
+  on a spinner. Both controllers now catch it and record
+  `API_RESPONSE_UNREADABLE` under the `unreachable` kind, keeping the stored
+  session where nothing says the token died. Two tests cover it, one of them
+  asserting the renewal keeps the session rather than signing the person out over
+  a parsing problem.
+- **`verify-infrastructure.mjs` printed endpoints, not versions.** It reported
+  "PostgreSQL: localhost:5432" and "Redis: redis://localhost:6379", which reads
+  exactly like a run against the reference versions whether or not that was true.
+  The claim "real PostgreSQL and Redis" was unverifiable from its own output.
+- **A failed health-probe wait discarded what the API printed.** The step reported
+  "the API never answered after 30s" and nothing else. A refused bind, an unset
+  variable or a schema violation are all visible in the API's own log, so the
+  message was the least useful one available. The output is now included on that
+  failure.
+- **`PASSWORD_MIN_LENGTH` had a second, frozen copy in the request DTOs, and the
+  copy won.** `RegisterDto` and `PasswordRecoveryCompleteDto` both declared
+  `@MinLength(10)`. The validation pipe runs before the service, so the constant
+  decided the outcome and `AuthService.assertPasswordPolicy` - which reads the
+  configured value - was only reached above 10. Consequences: an operator lowering
+  the setting changed nothing at all, and a client that renders `details.reasons`
+  (which both Flutter forms already do) got class-validator's English text instead
+  of the reasons, because the failing layer is the one that decides the shape.
+  Found by replaying the exact request bodies the new recovery client builds
+  against the running API. Both decorators are gone, length is policy rather than
+  shape as the DTO file's own header says, and six e2e cases hold it on both
+  endpoints - including the lowering direction, which is the one that catches the
+  regression. Verified by restoring the decorators: 4 of the 6 fail.
 
 ### Still unproven
 
@@ -486,7 +533,22 @@ a wrong password returning `401` with the error envelope.
   `scripts/verify-infrastructure.mjs` prints it so a failed health step is
   diagnosable from the output alone.
 - **Redis 7 specifically.** The Lua rate limiter has been proven against a
-  Redis-API-compatible server, not against `redis:7-alpine`.
+  Redis-API-compatible server, not against `redis:7-alpine`. This is now reported
+  rather than left for the reader to remember: `scripts/verify-infrastructure.mjs`
+  asks each live server for its version (`SHOW server_version` and `INFO server`)
+  and prints it next to the image the compose file pins, so a run against
+  Memurai 8.2 cannot be mistaken for a run against Redis 7. On this host the
+  output reads:
+
+  ```
+  PostgreSQL: 16.14 at localhost:5432 (compose pins postgres:16-alpine)
+  Redis:      8.2.10 at redis://localhost:6379 (compose pins redis:7-alpine)
+  ```
+
+  PostgreSQL matches its pin. Redis does not, and the script says so. The pins
+  are read from `docker-compose.test.yml` rather than repeated in the script, so
+  the comparison cannot go on asserting a match after the pin moves;
+  `test/infrastructure/verify-script.spec.ts` holds that.
 
 ---
 
@@ -494,17 +556,14 @@ a wrong password returning `401` with the error envelope.
 
 1. PHASE 03 / PHASE 01 - run the CI `integration` job so the compose files, not
    just reachable endpoints, are proven. It has never run: no remote is configured
-2. Mobile - give the customer application a password recovery screen
-   (`AuthApi.forgotPassword` / `resetPassword`, then a request and a redeem
-   screen). The endpoints are proven; only the interface is missing
+2. PHASE 04 - Users and roles: per-role permissions and guards on real endpoints,
+   starting from the matrix `packages/auth` already owns
 3. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the
    existing `TokenStore` port. Deliberately deferred: both apps are placeholders,
    so the file would be written against nothing and would only look finished
-4. PHASE 04 - Users and roles: per-role permissions and guards on real endpoints,
-   starting from the matrix `packages/auth` already owns
-5. Implement provider adapters behind the existing interfaces (map, payment,
+4. Implement provider adapters behind the existing interfaces (map, payment,
    storage) instead of extending the "not configured" guards
-6. Promote the admin HTTP client to `packages/` only when a second web client
+5. Promote the admin HTTP client to `packages/` only when a second web client
    needs it (ADR-018)
 
 ---

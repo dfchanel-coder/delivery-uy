@@ -220,9 +220,11 @@ Add:
 ## PHASE 03 - Authentication
 
 Status: IN_PROGRESS - one exit criterion outstanding (the CI `integration` job,
-which has never run because this repository has no remote). Everything else in
-the phase is implemented, documented and verified locally or by hand against real
-infrastructure.
+which has never run because this repository has no remote). Every other
+criterion in AGENTS.md section 65 is met, including the frontend one that the
+password recovery slice closed: every endpoint in the phase has a screen in
+`apps/customer`. Everything else in the phase is implemented, documented and
+verified locally or by hand against real infrastructure.
 
 Implement:
 
@@ -299,6 +301,36 @@ documentation:
   account still needs approval, instead of offering a sign-in that would be
   answered `403`
 
+Closed on 2026-10-02 by the password recovery interface, the last item the frontend
+integration criterion was missing:
+
+- `packages/dart/core`: `AuthApi.requestPasswordRecovery` and
+  `completePasswordRecovery`, with `PasswordRecoveryAccepted` and
+  `PasswordRecoveryResult`. The `status` literal is checked rather than stored, so
+  a renamed field raises `FormatException` instead of being read as success
+- `apps/customer`: `PasswordRecoveryController` and the three-step screen behind
+  "¿Olvidaste tu contraseña?" on the sign-in form. Recovery is deliberately **not**
+  an `AuthStatus`: the API returns no credentials after a reset, so a controller
+  that treated it as a way in would describe something the API does not do. A
+  refusal keeps the person on the step they started from, the token is cleared
+  before the call that spends it and never restored, and no screen claims a
+  message was sent - the acknowledgement proves the request arrived, not that an
+  address exists or that a provider delivered anything
+- `AuthFailureKind.unreachable` now covers what its own comment always claimed,
+  "answered something unreadable". See PROJECT_STATE.md, defects
+- `services/api`: the frozen `@MinLength(10)` is out of both password DTOs, so
+  `PASSWORD_MIN_LENGTH` is again the only authority on length. See PROJECT_STATE.md,
+  defects
+
+Verified locally on 2026-10-02: `pnpm verify` exit 0 with 612 tests across 23
+files, and `pnpm run flutter:check` exit 0 with 153 Dart tests (88 in
+`apps/customer`). Replayed against the running API with the request bodies the new
+client builds: `password/forgot` answers `202 {"data":{"status":"accepted"}}` for a
+registered and an unregistered address **byte for byte**, and `password/reset`
+answers `401 TOKEN_INVALID` for an unknown token - both exactly what the strict
+decoders require. The join of client and server in one emulator session is still
+not proven, and is not claimed.
+
 Three real defects were found while building this, all fixed and covered:
 `markEmailVerified` used one flag for two decisions, so with
 `REQUIRE_EMAIL_VERIFICATION=true` a customer who proved their address stayed
@@ -335,7 +367,11 @@ falls back to **Memurai** on Windows. The Lua rate limiter has therefore been
 proven against a Redis-API-compatible server at a different major version, not
 against `redis:7-alpine`. `docs/TESTING.MD` already requires local versions to
 match the compose ones, so this is a real gap in the local evidence and not a
-detail; the CI job is what closes it.
+detail; the CI job is what closes it. Since this was written the gap stopped being
+something a reader has to remember: `scripts/verify-infrastructure.mjs` asks each
+server for its version and prints it beside the pin, so the run above shows
+`Redis: 8.2.10 ... (compose pins redis:7-alpine)` and says it was not proven
+against the reference version.
 
 ---
 

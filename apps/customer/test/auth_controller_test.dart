@@ -146,6 +146,69 @@ void main() {
       expect(controller.failureMessage, isNull);
     });
 
+    test('an answer that cannot be decoded is not an unhandled error', () async {
+      // Strict decoding raises a FormatException, which is not an
+      // ApiClientException. Before this was handled it escaped every catch and
+      // tore out of the controller, leaving the user on a spinner forever.
+      final AuthController controller = controllerOver(
+        (_) async => http.Response(
+          jsonEncode(<String, Object?>{
+            'data': <String, Object?>{'user': <String, Object?>{}, 'tokens': null},
+          }),
+          200,
+          headers: <String, String>{'content-type': 'application/json'},
+        ),
+      );
+
+      await controller.signIn(email: 'customer@deliveryuy.local', password: 'secret');
+
+      expect(controller.status, AuthStatus.signedOut);
+      expect(controller.session, isNull);
+      expect(controller.failureKind, AuthFailureKind.unreachable);
+      // Its own code, not the transport one: the server answered, so nothing
+      // shown may suggest it was unreachable.
+      expect(controller.failureCode, 'API_RESPONSE_UNREADABLE');
+      expect(controller.failureMessage, isNull);
+    });
+
+    test('an unreadable renewal keeps the stored session', () async {
+      // Dropping it would sign the person out over a parsing problem, when
+      // nothing says the token is dead.
+      final AuthController controller = controllerOver((http.Request request) async {
+        if (request.url.path.endsWith('/auth/login')) {
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'data': <String, Object?>{
+                'user': _wireUser(),
+                // Already inside the leeway, so the next call must renew.
+                'tokens': _wireTokens(expiresAt: '2026-01-05T12:15:00.000Z'),
+              },
+            }),
+            200,
+            headers: <String, String>{'content-type': 'application/json'},
+          );
+        }
+
+        // Answers 200 with a body the decoder cannot read.
+        return http.Response(
+          jsonEncode(<String, Object?>{
+            'data': <String, Object?>{'user': <String, Object?>{}},
+          }),
+          200,
+          headers: <String, String>{'content-type': 'application/json'},
+        );
+      });
+
+      await controller.signIn(email: 'customer@deliveryuy.local', password: 'secret');
+      expect(controller.status, AuthStatus.signedIn);
+
+      expect(await controller.ensureFreshSession(), isFalse);
+      expect(controller.failureCode, 'API_RESPONSE_UNREADABLE');
+      expect(controller.status, AuthStatus.signedIn);
+      expect(controller.session, isNotNull);
+      expect((await store.read(_config.apiBaseUrl))?.refreshToken, isNotNull);
+    });
+
     test('ignores a second tap while a sign-in is in flight', () async {
       // Double taps are common on flaky mobile data; two concurrent sign-ins
       // would open two sessions (AGENTS.md section 43).

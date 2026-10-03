@@ -13,8 +13,8 @@ class AuthFailureBanner extends StatelessWidget {
   /// Creates the banner.
   const AuthFailureBanner({super.key, required this.controller});
 
-  /// Session state holding the failure to describe.
-  final AuthController controller;
+  /// Attempt holding the failure to describe.
+  final AuthFailureSource controller;
 
   @override
   Widget build(BuildContext context) {
@@ -22,7 +22,7 @@ class AuthFailureBanner extends StatelessWidget {
     final AuthFailureKind? kind = controller.failureKind;
     final String message = kind == AuthFailureKind.unreachable
         ? 'No pudimos conectar con el servidor. Revisá tu conexión e intentá de nuevo.'
-        : controller.failureMessage ?? 'No pudimos iniciar sesión.';
+        : controller.failureMessage ?? controller.failureFallbackMessage;
 
     return Card(
       color: theme.colorScheme.errorContainer,
@@ -88,10 +88,17 @@ class AuthFailureBanner extends StatelessWidget {
 /// Form for an existing account.
 class SignInForm extends StatefulWidget {
   /// Creates the sign-in form.
-  const SignInForm({super.key, required this.controller});
+  const SignInForm({
+    super.key,
+    required this.controller,
+    required this.onPasswordRecoveryRequested,
+  });
 
   /// Session state this form drives.
   final AuthController controller;
+
+  /// Called when the user asks to recover a password instead.
+  final VoidCallback onPasswordRecoveryRequested;
 
   @override
   State<SignInForm> createState() => _SignInFormState();
@@ -142,6 +149,14 @@ class _SignInFormState extends State<SignInForm> {
             busy: busy,
             label: 'Ingresar',
             onPressed: () => unawaited(_submit()),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            // Kept below the primary action and worded as a question, because it
+            // is the alternative for someone the form is refusing, not an
+            // equivalent way to sign in.
+            onPressed: busy ? null : widget.onPasswordRecoveryRequested,
+            child: const Text('¿Olvidaste tu contraseña?'),
           ),
         ],
       ),

@@ -125,13 +125,20 @@ pnpm run infra:verify
 `--from <n>` starts at a step for iteration; every earlier step is reported as
 **not proved** by that run, so a partial run cannot be mistaken for a full one.
 
-Two things this script does not settle, and which stay open until the CI job runs:
+Three things this script does not settle, and which stay open until the CI job runs:
 
 - the compose files bringing those servers up (no container runtime needed by the
   script, only reachable endpoints);
 - the health budget. Step 6 prints `HEALTH_CHECK_TIMEOUT_MS`, because the probe
   opens its own client and a host where connecting is slow needs a larger budget
-  than the default. See `HEALTH_CHECK_TIMEOUT_MS` in `.env.example`.
+  than the default. See `HEALTH_CHECK_TIMEOUT_MS` in `.env.example`;
+- the **versions**. It reports them, and warns when they differ from the pins, but
+  it cannot make a local Redis 7 exist. See the version rule below.
+
+The script prints what the API said when step 6 fails to become live. A refused
+bind, an unset variable and a schema violation are all visible in the API's own
+log, so a failure message that reported only "the API never answered" would be the
+least useful one available.
 
 #### Running the suite without Docker
 
@@ -151,6 +158,26 @@ node scripts/assert-integration-report.mjs
 Local PostgreSQL and Redis versions must match the compose ones (PostgreSQL 16,
 Redis 7); a different major version can make a migration or a Lua script pass
 locally and fail in CI, which is worse than not running the suite at all.
+
+**The rule is not always satisfiable, so the tooling reports instead of assuming.**
+There is no Redis 7 build for Windows without WSL or a container runtime, and
+`redis-memory-server` resolves to Memurai there. Rather than leave that as
+knowledge somebody has to hold, `scripts/verify-infrastructure.mjs` asks each live
+server what it is - `SHOW server_version` and `INFO server` - and prints the
+answer next to the image `docker-compose.test.yml` pins:
+
+```
+PostgreSQL: 16.14 at localhost:5432 (compose pins postgres:16-alpine)
+Redis:      8.2.10 at redis://localhost:6379 (compose pins redis:7-alpine)
+Health:     5000 per dependency
+```
+
+A mismatch is a **warning, not a failure**. Failing would assert a compatibility
+claim the script cannot establish, and the suites may well pass; what it must not
+do is pass without saying so. The pins are read out of the compose file rather
+than repeated in the script, so the comparison cannot go on asserting a match
+after a pin moves - `test/infrastructure/verify-script.spec.ts` holds that, along
+with the requirement that no image reference is duplicated into the script.
 
 **Transaction and pool timings differ from CI.** Two concurrent interactive
 transactions serialise, and the wait is a fixed penalty rather than something
@@ -228,12 +255,18 @@ infrastructure, and read their subjects as structured data rather than as text.
 | `compose.spec.ts` | both compose files parse; every service pins an image and a healthcheck; no container name or host port is shared between the development and test stacks; the test stack cannot inherit state; the bootstrap mount source exists; every interpolated variable is documented in `.env.docker.example` and every documented one is used; the published PostgreSQL and Redis match the `DATABASE_URL` and `REDIS_URL` in `.env.example` |
 | `ci-workflow.spec.ts` | every job is bounded in time; the workflow is read-only; no step may fail quietly; every action is pinned to a released version; every `pnpm` script and every file the workflow names exists; every variable it sets is read by the configuration schema, or is allowlisted with the file that owns it; the values satisfy the real schema; the `integration` job starts real service containers with healthchecks and runs the shared verification script; no `${{ secrets.* }}` |
 | `integration-suite.spec.ts` | the report script walks the same roots the integration config collects, collects only integration specs, and the suite stays on a single fork |
+| `verify-script.spec.ts` | the verification script asks each live server for its version and prints it; the reference images are read out of `docker-compose.test.yml` rather than repeated in the script, and no pinned image appears inside it; a mismatch is reported as a warning and never silently passes; a failed health wait includes what the API printed; `DATABASE_URL` and `REDIS_URL` are declared required; the compose files are still admitted to be unproven |
 
 Two of these checks exist because the corresponding failure is silent. A bind
 mount whose source is missing becomes an empty directory and the container starts
 healthfully having skipped its bootstrap. A port published by compose that
 disagrees with the documented `DATABASE_URL` produces an API that cannot connect
 to its own stack. Neither is visible until someone runs the stack.
+
+`verify-script.spec.ts` exists for a third silent failure, the one where the tool
+claims more than it proved. A verification script that prints only hostnames reads
+exactly the same whether it ran against the reference versions or against whatever
+the developer had installed.
 
 **What they cannot prove.** That the images start and become healthy. That needs a
 container runtime, which is why `scripts/verify-infrastructure.mjs` takes

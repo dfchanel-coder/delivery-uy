@@ -29,6 +29,34 @@ enum AuthFailureKind {
   unreachable,
 }
 
+/// What a failure banner needs in order to describe a failed attempt.
+///
+/// Implemented by [AuthController] and by the password recovery flow, so both
+/// describe a rejection with the same copy. It exists because recovery is not a
+/// session state: those attempts belong to the screen the person started from
+/// and must not move them onto the sign-in form, so they carry their own failure
+/// rather than sharing the session controller's.
+abstract class AuthFailureSource {
+  /// Why the attempt failed, or null when it succeeded.
+  AuthFailureKind? get failureKind;
+
+  /// Message supplied by the API, when it supplied one.
+  String? get failureMessage;
+
+  /// Wording for when the API rejected the attempt but sent no message.
+  ///
+  /// Declared here rather than written into the banner because only the flow
+  /// knows what it was trying to do: "we could not sign you in" would be false
+  /// on a screen that was changing a password.
+  String get failureFallbackMessage;
+
+  /// Structured details supplied by the API, such as password policy reasons.
+  Map<String, Object?>? get failureDetails;
+
+  /// Server-side log identifier, for support conversations.
+  String? get failureCorrelationId;
+}
+
 /// Owns the session state of the customer application.
 ///
 /// The controller holds the open session in memory and persists only the refresh
@@ -39,7 +67,7 @@ enum AuthFailureKind {
 ///
 /// Every permission decision stays on the API. This class never decides what an
 /// account may do; it only reflects what the API reported (AGENTS.md section 42).
-class AuthController extends ChangeNotifier {
+class AuthController extends ChangeNotifier implements AuthFailureSource {
   /// Creates a controller over [authApi], persisting through [tokenStore].
   ///
   /// [config] is carried along so the interface can show which deployment it is
@@ -96,6 +124,7 @@ class AuthController extends ChangeNotifier {
   bool get pendingVerificationConfirmed => _pendingVerificationConfirmed;
 
   /// Why the last attempt failed, or null when it succeeded.
+  @override
   AuthFailureKind? get failureKind => _failureKind;
 
   /// Machine readable code of the last failure, for support conversations.
@@ -104,13 +133,20 @@ class AuthController extends ChangeNotifier {
   String? get failureCode => _failureCode;
 
   /// Message supplied by the API for the last failure.
+  @override
   String? get failureMessage => _failureMessage;
+
+  /// Wording for a rejection the API did not describe.
+  @override
+  String get failureFallbackMessage => 'No pudimos completar la operación.';
 
   /// Structured details supplied by the API, such as the password policy
   /// reasons behind a `VALIDATION_FAILED`.
+  @override
   Map<String, Object?>? get failureDetails => _failureDetails;
 
   /// Server-side log identifier for the last failure, when the API sent one.
+  @override
   String? get failureCorrelationId => _failureCorrelationId;
 
   /// Whether a request is in flight.
@@ -139,6 +175,11 @@ class AuthController extends ChangeNotifier {
       await _openSession(session);
     } on ApiClientException catch (error) {
       _recordFrom(error);
+      notifyListeners();
+    } on FormatException catch (error) {
+      // A sign-in that cannot be decoded did not open a session, so this is the
+      // same situation as a refusal and leaves the same screen.
+      _recordFromUnreadable(error);
       notifyListeners();
     }
   }
@@ -179,6 +220,11 @@ class AuthController extends ChangeNotifier {
       await _openSession(session);
     } on ApiClientException catch (error) {
       _recordFrom(error);
+      notifyListeners();
+    } on FormatException catch (error) {
+      // The account may well exist; only the answer is unusable, so the person is
+      // sent back to the form to try again rather than told anything definite.
+      _recordFromUnreadable(error);
       notifyListeners();
     }
   }
@@ -370,6 +416,12 @@ class AuthController extends ChangeNotifier {
       _recordFailureOnly(error);
       _status = previous;
       notifyListeners();
+    } on FormatException catch (error) {
+      // Same reasoning as a refused code: the person stays where the field is,
+      // because an unreadable answer says nothing about the code they typed.
+      _recordUnreadable(error);
+      _status = previous;
+      notifyListeners();
     }
   }
 
@@ -444,6 +496,15 @@ class AuthController extends ChangeNotifier {
       notifyListeners();
 
       return false;
+    } on FormatException catch (error) {
+      // An unreadable renewal is not proof the token is dead, so the stored
+      // session is kept: dropping it would sign the person out over a parsing
+      // problem, and keeping it costs at most one more failed attempt.
+      _recordUnreadable(error);
+      _status = _session == null ? AuthStatus.signedOut : AuthStatus.signedIn;
+      notifyListeners();
+
+      return false;
     }
   }
 
@@ -478,6 +539,14 @@ class AuthController extends ChangeNotifier {
       notifyListeners();
 
       return _AccountAttempt.unreachable(error);
+    } on FormatException catch (error) {
+      // The access token was not refused: nothing says it expired or was
+      // revoked, so this must not be mistaken for a session that needs signing
+      // out. Reported as unreachable, and the session is left open.
+      _recordUnreadable(error);
+      notifyListeners();
+
+      return _AccountAttempt.unreachable(null);
     }
   }
 
@@ -512,12 +581,23 @@ class AuthController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Records a rejection or a transport failure.
+  /// Records a rejection, a transport failure, or an unreadable answer.
   ///
   /// A request failure never keeps a session: the user asked for something they
   /// do not have, and leaving a half-authenticated screen would be worse.
   void _recordFrom(ApiClientException error) {
     _recordFailureOnly(error);
+
+    _session = null;
+    _status = AuthStatus.signedOut;
+  }
+
+  /// Records an unreadable answer the way a refused request is recorded.
+  ///
+  /// Same consequence, different cause: no session was opened and none can be,
+  /// so the sign-in form is where the person belongs.
+  void _recordFromUnreadable(FormatException error) {
+    _recordUnreadable(error);
 
     _session = null;
     _status = AuthStatus.signedOut;
@@ -543,6 +623,26 @@ class AuthController extends ChangeNotifier {
       _failureMessage = null;
       _failureCorrelationId = null;
       _failureDetails = null;
+    }
+  }
+
+  /// Records a response the client could not decode.
+  ///
+  /// Grouped with a transport failure because they are the same situation from
+  /// the user's side: nothing usable came back, and retrying the same input may
+  /// work. The reason is kept as a developer-facing value only, never shown, and
+  /// no copy claims the server was down: the server answered, with something
+  /// this client does not understand (AGENTS.md section 5).
+  void _recordUnreadable([Object? reason]) {
+    _failureKind = AuthFailureKind.unreachable;
+    _failureCode = 'API_RESPONSE_UNREADABLE';
+    // Not shown to the user: the interface writes its own copy for this kind,
+    // because these messages are developer facing.
+    _failureMessage = null;
+    _failureCorrelationId = null;
+    _failureDetails = null;
+    if (reason != null) {
+      debugPrint('DeliveryUY: unreadable API response: $reason');
     }
   }
 
@@ -574,8 +674,11 @@ class _AccountAttempt {
     : account = null,
       tokenRejected = false;
 
-  /// The API could not be reached.
-  const _AccountAttempt.unreachable(ApiClientException this.error)
+  /// The API could not be reached, or answered something unreadable.
+  ///
+  /// [error] is null for the second case: the caller only needs the distinction
+  /// from a rejected token, and there is no client exception to hand over.
+  const _AccountAttempt.unreachable(this.error)
     : account = null,
       tokenRejected = false;
 
