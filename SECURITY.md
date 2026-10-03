@@ -555,3 +555,55 @@ is the only place the compose files themselves are exercised.
 Not yet applicable, because the feature does not exist yet: IDOR on orders,
 delivery code brute force, WebSocket room authorization, webhook signatures and
 upload content-type spoofing.
+
+## PHASE 04 status
+
+The authorization mechanism itself is now covered. Until this, the three global
+guards ran in front of every request and no test had ever reached them: no route
+in the repository carried `@Roles()` or `@Permissions()`, so the matrix in
+`packages/auth` was tested while the code that applies it to a request was not
+tested at all.
+
+- `RolesGuard` and `PermissionsGuard` (`rbac.guards.spec.ts`, 20 tests) - a
+  route that declares nothing is allowed, which is not an open door because
+  `JwtAuthGuard` still ran; `@Roles()` is satisfied by **any** listed role and
+  `@Permissions()` by **all** of them; `ADMIN` does not pass a `SUPER_ADMIN`
+  requirement; a role or permission name outside the matrix is refused for every
+  caller including `SUPER_ADMIN`, so a typo fails closed rather than reading as
+  "nothing was asked"; the refusal names what the route requires and never what
+  the caller holds, so a protected endpoint cannot be used to map the policy; a
+  missing principal is reported as a server fault rather than a `403` that would
+  send the reader after the wrong problem
+- `JwtAuthGuard` (`jwt-auth.guard.spec.ts`, 26 tests) - a public route never
+  reaches the verifier and gets no principal; a missing, foreign-scheme or
+  valueless header is refused without consulting it; the scheme is matched
+  case-insensitively; the token reaches `verify()` and nothing else, so the
+  request carries only `headers` and `principal`; unknown role names are dropped
+  at this boundary; `TOKEN_EXPIRED` is the only rejection a client can recover
+  from and the other six are `TOKEN_INVALID`, each keeping its reason for
+  support; and a fault inside the verifier becomes a `500` whose message says
+  nothing about the token
+- the decorators and the principal lookup (`endpoint-security.spec.ts`, 12 tests)
+  - including the recorded fact that **none of them validate anything**:
+  `@Roles('ROOT')` and `@Permissions('admin:order:read')` store exactly what they
+  were handed. The types stop a typo at compile time and nothing stops one at
+  runtime, which is why the permission guard has to refuse an unknown name
+  instead of treating it as no requirement
+
+Two of these assertions were proven load-bearing rather than merely passing: the
+"all permissions" check and the `500`-on-verifier-fault branch were each disabled
+in the guard, the corresponding test failed, and the guard was restored byte for
+byte afterwards. The `500` branch is the one that mattered most to find, because
+reported as a `401` it would make every client read a server fault as "your
+session is over", discard a valid refresh token and sign the user out.
+
+One real defect was found while writing these: `principalFromRequest` tested
+`principal === undefined` only, so middleware clearing the principal on sign-out
+would have had `null` returned as if it were one, and the failure would have
+surfaced later as a `TypeError` on `principal.roles` rather than at the one place
+whose message names `JwtAuthGuard`.
+
+Not yet proven: the matrix exercised end to end. No route uses `@Roles()` or
+`@Permissions()`, `AdminModule` does not exist, and the seed creates neither
+`SUPER_ADMIN` nor `SUPPORT` nor `FINANCE`, so a real deployment currently cannot
+produce a caller that any of the `admin:*` permissions are about.

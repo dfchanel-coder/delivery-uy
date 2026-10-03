@@ -62,7 +62,11 @@ export function principalOf(context: ExecutionContext): AuthenticatedPrincipal {
 export function principalFromRequest(request: RequestWithPrincipal): AuthenticatedPrincipal {
   const principal = request.principal;
 
-  if (principal === undefined) {
+  // `null` counts as missing even though the type cannot express it: middleware
+  // that clears a principal on sign-out would otherwise hand `null` back as if
+  // it were one, and the failure would surface later as a TypeError on
+  // `principal.roles` rather than here, where the cause is obvious.
+  if (principal === undefined || principal === null) {
     // Reaching this means a guard chain was misconfigured, not that the caller
     // misbehaved: it is a server bug and must not be answered as a client error.
     throw new Error('No principal on the request. Ensure JwtAuthGuard runs for this route.');

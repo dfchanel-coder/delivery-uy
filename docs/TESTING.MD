@@ -131,7 +131,14 @@ Three things this script does not settle, and which stay open until the CI job r
   script, only reachable endpoints);
 - the health budget. Step 6 prints `HEALTH_CHECK_TIMEOUT_MS`, because the probe
   opens its own client and a host where connecting is slow needs a larger budget
-  than the default. See `HEALTH_CHECK_TIMEOUT_MS` in `.env.example`;
+  than the default. See `HEALTH_CHECK_TIMEOUT_MS` in `.env.example`. **Observed on
+  this host:** with the 2000 ms default, a healthy PostgreSQL answered in
+  `2187 ms` and readiness returned `503 SERVICE_UNAVAILABLE` with a message
+  saying dependencies were degraded - when nothing was wrong. Re-running with
+  `HEALTH_CHECK_TIMEOUT_MS=20000` gave `database=up in 2187ms, redis=up in
+  20ms`. So a 503 from step 6 on a slow or loaded machine is worth reading as a
+  budget problem before it is read as an outage, and the dependency timings the
+  script prints are the evidence;
 - the **versions**. It reports them, and warns when they differ from the pins, but
   it cannot make a local Redis 7 exist. See the version rule below.
 

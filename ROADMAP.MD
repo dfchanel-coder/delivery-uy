@@ -342,8 +342,8 @@ deliberately allows.
 
 Verified locally on 2026-10-02: `pnpm run lint`, `pnpm run build`,
 `pnpm run typecheck`, `pnpm run build:admin`, `pnpm run format:check`,
-`pnpm verify` exit 0, 596 vitest tests across 22 files, `pnpm run flutter:check`
-exit 0 with 130 Dart tests, and 51 integration tests across 7 files with 0
+`pnpm verify` exit 0, 612 vitest tests across 23 files, `pnpm run flutter:check`
+exit 0 with 153 Dart tests, and 51 integration tests across 7 files with 0
 skipped against real PostgreSQL and Redis. Both message flows were additionally
 verified by hand against a real SMTP conversation; see `SECURITY.md` for what was
 observed.
@@ -388,6 +388,80 @@ SUPPORT
 FINANCE
 
 Add permissions and guards.
+
+### Progress
+
+The roles and the permission model already exist, and this phase starts by
+proving them rather than by adding them:
+
+- `packages/auth/src/rbac.ts` holds the 7 roles and the 16 `admin:*` permissions
+  in a frozen matrix. `CUSTOMER`, `MERCHANT` and `DRIVER` map to an empty
+  permission list, which is accurate rather than incomplete: no endpoint needs one
+  yet
+- `RolesGuard`, `PermissionsGuard` and `JwtAuthGuard` are registered globally, in
+  that order, behind `RateLimitGuard`
+- `@Roles()`, `@Permissions()`, `@Public()` and `@RateLimit()` declare what a
+  route requires
+- `AppRole` and the `UserRole` table exist in the schema and the seed assigns
+  roles
+
+What was missing was any evidence that the guards work. No route in the
+repository carried `@Roles()` or `@Permissions()`, so the only thing that had
+ever decided their behaviour was that nothing had reached them. That is the
+dangerous shape of untested code: these three guards run in front of every
+request in the process, and a fault in them would stay invisible until the first
+protected endpoint exists - at which point it is an authorization bypass rather
+than a failing test.
+
+58 tests now cover them on their own terms, following the existing
+`rate-limit.guard.spec.ts` pattern:
+
+- `rbac.guards.spec.ts` - `@Roles()` is satisfied by **any** listed role and
+  `@Permissions()` by **all** of them, which is the difference between the two
+  guards and the reason the second is preferred for privileged actions. `ADMIN`
+  does not pass a `SUPER_ADMIN` requirement, a role or permission name outside
+  the matrix is refused for everyone including `SUPER_ADMIN` (so a typo fails
+  closed), the refusal names what the route needs but never what the caller
+  holds, and a missing principal is reported as a server fault rather than a
+  `403` that would point the reader at the wrong problem
+- `jwt-auth.guard.spec.ts` - a public route never reaches the verifier, a
+  malformed header is refused without consulting it, `TOKEN_EXPIRED` is the only
+  rejection a client can recover from while the other six are `TOKEN_INVALID`,
+  and a fault inside the verifier becomes a `500` whose message says nothing
+  about the token. That last branch had no coverage anywhere, and it matters
+  most: reported as a `401`, a server fault would make every client read it as
+  "your session is over", discard a valid refresh token and sign the user out
+- `endpoint-security.spec.ts` - the decorators, and the finding that **none of
+  them validate anything**. `@Roles('ROOT')` stores `'ROOT'` verbatim, because the
+  types stop a typo at compile time and nothing stops one at runtime. That is
+  recorded where the weakness lives, and it is the reason the permission guard
+  has to refuse an unknown name rather than treat it as no requirement
+
+Three of the assertions were checked by mutating the guard and confirming the
+test failed: `all` relaxed to `any` in `PermissionsGuard`, the empty-list early
+return removed, and the `INTERNAL_ERROR` branch disabled. The guards were then
+restored byte for byte.
+
+One real defect was found and fixed. `principalFromRequest` tested
+`principal === undefined` only, so middleware that cleared the principal on
+sign-out would have had `null` returned as if it were one, and the failure would
+have surfaced later as a `TypeError` on `principal.roles` instead of at the one
+place whose message names `JwtAuthGuard`.
+
+Verified locally on 2026-10-03: `pnpm verify` exit 0 with 670 tests across 26
+files, `pnpm run build` exit 0, and `scripts/verify-infrastructure.mjs` exit 0
+with 6/6 steps, 51 integration tests across 7 files with 0 skipped against real
+PostgreSQL and Redis, and `live 200, ready 200, database=up, redis=up`.
+
+Remaining before this phase can close:
+
+1. an endpoint that actually uses the mechanism. The 16 `admin:*` permissions
+   name capabilities that no route requires yet, so today the matrix is tested
+   but not exercised end to end. `AdminModule` does not exist
+2. `SUPER_ADMIN`, `SUPPORT` and `FINANCE` are absent from the seed, so the matrix
+   cannot be exercised against a real deployment
+3. permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`, once there are
+   endpoints that need them
 
 ---
 

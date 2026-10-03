@@ -1,9 +1,9 @@
 # DeliveryUY Project State
 
-LAST_UPDATED: 2026-10-02
+LAST_UPDATED: 2026-10-03
 
-CURRENT_PHASE: PHASE 03
-CURRENT_MODULE: Authentication - Argon2id hashing, access and refresh tokens, session revocation, RBAC, rate limiting, password recovery and address verification over real SMTP, development user seed
+CURRENT_PHASE: PHASE 04
+CURRENT_MODULE: Users and Roles - direct tests for the three global guards (JwtAuthGuard, RolesGuard, PermissionsGuard) and the endpoint security decorators, which until now no test had ever reached
 
 ---
 
@@ -362,6 +362,20 @@ Run against a local sink outside the repository (not a committed fixture), with
 
 ## IN_PROGRESS
 
+- PHASE 04 - Users and Roles: the roles and the permission model are already in
+  place, so this slice spent itself proving them instead of adding them.
+  `JwtAuthGuard`, `RolesGuard` and `PermissionsGuard` are registered globally and
+  run in front of every request, yet no test had ever reached them: no route in the
+  repository carries `@Roles()` or `@Permissions()`, so until now the only thing
+  that had decided their behaviour was that nothing had reached them. 58 tests now
+  cover the three guards and the decorators (`rbac.guards.spec.ts`,
+  `jwt-auth.guard.spec.ts`, `endpoint-security.spec.ts`). Three assertions were
+  proven load-bearing by mutating the guard and watching the test fail, and the
+  guards were restored byte for byte afterwards. One real defect was found and
+  fixed: `principalFromRequest` accepted `null` as a principal. Still missing for
+  the phase: an endpoint that uses the mechanism (`AdminModule` does not exist),
+  `SUPER_ADMIN`/`SUPPORT`/`FINANCE` in the seed, and permission names for the
+  three non-privileged roles
 - PHASE 03 - Authentication: implementation, documentation, `pnpm verify` exit 0
   (612 unit/API tests across 23 files), the Dart gate exit 0, the integration suite
   against real PostgreSQL and Redis (51 executed, 0 skipped, 7 files) and a real
@@ -556,8 +570,11 @@ a wrong password returning `401` with the error envelope.
 
 1. PHASE 03 / PHASE 01 - run the CI `integration` job so the compose files, not
    just reachable endpoints, are proven. It has never run: no remote is configured
-2. PHASE 04 - Users and roles: per-role permissions and guards on real endpoints,
-   starting from the matrix `packages/auth` already owns
+2. PHASE 04 - build the first surface that uses the mechanism now that the guards
+   are proven: `AdminModule` with endpoints behind the `admin:*` permissions that
+   today hang from nothing, plus `SUPER_ADMIN`, `SUPPORT` and `FINANCE` in the
+   seed so the matrix can be exercised against a real deployment and not only in
+   unit tests
 3. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the
    existing `TokenStore` port. Deliberately deferred: both apps are placeholders,
    so the file would be written against nothing and would only look finished
