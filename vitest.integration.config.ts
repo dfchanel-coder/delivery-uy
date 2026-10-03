@@ -40,6 +40,9 @@ export default defineConfig({
         'packages/database/src/**/*.ts',
         'services/api/src/common/rate-limit/**/*.ts',
         'services/api/src/modules/auth/**/*.ts',
+        // The health probe reaches PostgreSQL and Redis on its own clients, so it
+        // has integration-only behaviour and belongs to this report.
+        'services/api/src/modules/health/**/*.ts',
       ],
       exclude: ['**/dist/**', '**/*.spec.ts', '**/*.module.ts', '**/index.ts', '**/ports.ts'],
     },

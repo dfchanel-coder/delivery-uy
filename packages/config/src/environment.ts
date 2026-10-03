@@ -57,6 +57,19 @@ const environmentObjectSchema = z.object({
     }),
   DATABASE_POOL_SIZE: z.coerce.number().int().min(1).max(100).default(10),
   REDIS_URL: z.string({ required_error: 'REDIS_URL is required' }),
+  // Bounds one whole dependency check, TCP connection and authentication
+  // included. The readiness probe opens a short-lived client by design
+  // (`DatabaseModule`), so its first query always pays a cold connect before the
+  // measured round trip begins; the budget has to cover connecting, not just
+  // querying.
+  //
+  // 2000 ms is ample when the database is a local container or a socket. It is
+  // not enough when connecting itself is slow - a managed instance across a
+  // network, or a Windows host where PostgreSQL is a native process, where a cold
+  // connect measured about 2.1 s. Raise this per deployment rather than
+  // globally: a budget far above what a real connection costs turns a genuine
+  // hang into a slow success, and one above about a second can exceed an
+  // orchestrator's own probe timeout, which fails the probe regardless.
   HEALTH_CHECK_TIMEOUT_MS: z.coerce.number().int().min(100).max(30000).default(2000),
 
   // --- security ------------------------------------------------------

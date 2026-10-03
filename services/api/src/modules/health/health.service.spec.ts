@@ -16,9 +16,10 @@ function buildConfigService(): AppConfigService {
   );
 }
 
-function fakeDatabase(behaviour: 'up' | 'down'): PrismaClient {
+function fakeDatabase(behaviour: 'up' | 'down' | 'slow'): PrismaClient {
   return {
     $queryRawUnsafe: vi.fn(async () => {
+      if (behaviour === 'slow') await new Promise((resolve) => setTimeout(resolve, 500));
       if (behaviour === 'down') throw new Error('connection refused');
       return [{ ok: 1 }];
     }),
@@ -102,6 +103,19 @@ describe('HealthService.readiness', () => {
     expect(report.dependencies.redis.status).toBe('down');
     expect(report.dependencies.redis.error).toContain('Connection is closed');
   });
+
+  it('degrades instead of throwing when the database is slower than the budget', async () => {
+    // The probe is allowed to be slow, never allowed to fail. A rejection here
+    // would escape the controller uncaught and answer 500, telling the operator
+    // the API is broken rather than that one dependency exceeded its budget.
+    const service = new HealthService(buildConfigService());
+    const report = await service.readiness(fakeDatabase('slow'), fakeRedis('up'), 50);
+
+    expect(report.status).toBe('degraded');
+    expect(report.dependencies.database.status).toBe('down');
+    expect(report.dependencies.database.error).toContain('timed out');
+    expect(report.dependencies.redis.status).toBe('up');
+  });
 });
 
 describe('HealthService.checkReadiness', () => {
@@ -174,5 +188,18 @@ describe('HealthController.readiness', () => {
 
     expect(database.$disconnect).toHaveBeenCalledOnce();
     expect(redis.quit).toHaveBeenCalledOnce();
+  });
+
+  it('answers 503, not 500, when a dependency exceeds its budget', async () => {
+    // The status code is what an orchestrator and a load balancer read. A slow
+    // dependency is a degraded service, not a broken endpoint, and the two
+    // provoke different reactions.
+    const service = new HealthService(buildConfigService());
+    const controller = new (await import('./health.controller.js')).HealthController(service);
+
+    vi.spyOn(service, 'createDatabaseClient').mockReturnValue(fakeDatabase('slow'));
+    vi.spyOn(service, 'createRedisClient').mockReturnValue(fakeRedis('up'));
+
+    await expect(controller.readiness()).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 });

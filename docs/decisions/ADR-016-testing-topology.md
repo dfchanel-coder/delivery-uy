@@ -1,6 +1,6 @@
 # ADR-016 - Testing Topology
 
-Status: ACCEPTED
+Status: ACCEPTED. The isolation bullet is superseded by ADR-023.
 
 ## Context
 
@@ -25,9 +25,9 @@ constraints, transactions and numeric behaviour live in PostgreSQL.
   Redis when the behaviour involves it), provided by
   `infrastructure/docker/docker-compose.test.yml`. Mocking `PrismaClient` is
   forbidden for repository-level tests.
-- Each test file runs against its own isolated schema (`TEST_SCHEMA` env
-  var) created before the suite and dropped afterwards, allowing parallel
-  execution without cross-test interference.
+- Each test file runs against its own isolated schema, allowing parallel
+  execution without cross-test interference. **Superseded by ADR-023**: the suite
+  uses one schema with explicit truncation and runs on a single fork.
 - `docs/TESTING.MD` rule enforced: assertions include querying the database for
   resulting rows (order status, ledger entries, audit log).
 - Provider adapters (MercadoPago, FCM, S3, maps) are tested against

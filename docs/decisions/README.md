@@ -23,13 +23,14 @@ accepted decision requires a new ADR that explicitly supersedes it
 | [013](ADR-013-configuration-and-feature-flags.md) | Configuration and Feature Flags | ACCEPTED                       |
 | [014](ADR-014-observability.md) | Observability, Correlation, Logging   | ACCEPTED                        |
 | [015](ADR-015-dispatch-engine.md) | Dispatch Engine Strategy             | ACCEPTED (LEGAL_REVIEW_REQUIRED)|
-| [016](ADR-016-testing-topology.md) | Testing Topology                      | ACCEPTED                        |
+| [016](ADR-016-testing-topology.md) | Testing Topology                      | ACCEPTED (isolation bullet superseded by 023) |
 | [017](ADR-017-test-transform.md) | Test Transform of NestJS Sources    | ACCEPTED                        |
 | [018](ADR-018-frontend-workspaces.md) | Frontend Workspaces and Shared Client Logic | ACCEPTED             |
 | [019](ADR-019-migration-verification.md) | Verifying Database Migrations without a Local Database | ACCEPTED |
 | [020](ADR-020-cryptography-libraries.md) | Cryptography Libraries for Password Hashing and Access Tokens | ACCEPTED |
 | [021](ADR-021-mobile-credential-persistence.md) | Credential Persistence in the Mobile Applications | ACCEPTED |
 | [022](ADR-022-notification-delivery.md) | Delivering Password Recovery and Address Verification | ACCEPTED |
+| [023](ADR-023-integration-spec-isolation.md) | Integration Spec Isolation         | ACCEPTED                        |
 
 ## Naming
 

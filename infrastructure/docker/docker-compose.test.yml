@@ -1,7 +1,8 @@
 # DeliveryUY - test infrastructure
 #
 # Integration and API tests run against a real PostgreSQL and Redis
-# (ADR-016). Each test file uses its own schema via TEST_SCHEMA.
+# (ADR-016). All of them share one schema and truncate between tests; the suite
+# runs on a single fork, so they cannot interfere (ADR-023).
 #
 # Usage:
 #   pnpm infra:test

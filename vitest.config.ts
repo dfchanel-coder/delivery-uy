@@ -13,6 +13,10 @@ export default defineConfig({
       'packages/*/src/**/*.spec.ts',
       'services/*/src/**/*.spec.ts',
       'apps/*/src/**/*.spec.ts',
+      // Contracts about the repository itself: the compose files, the CI
+      // workflow and the example environment. They read files rather than call
+      // the application, so they live at the root instead of inside a package.
+      'test/**/*.spec.ts',
     ],
     // Integration specs live next to the adapter they cover but are named
     // `*.integration.spec.ts`, and the ordinary suite never runs them: they need

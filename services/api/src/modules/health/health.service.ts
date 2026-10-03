@@ -43,13 +43,29 @@ export class HealthService {
     };
   }
 
+  /**
+   * Reports every dependency, and never throws.
+   *
+   * `checkDatabaseHealth` and `checkRedis` both bound themselves and both return
+   * a verdict rather than rejecting, so nothing here can fail the probe. That is
+   * deliberate: an orchestrator polling a slow database must receive a verdict
+   * naming which dependency is down, not a rejection from a timeout racing a
+   * handler that was already about to produce one. The database check is
+   * therefore not wrapped a second time here; a second bound would only decide
+   * which of two timers reports the same fact, and the loser turns the probe
+   * into a 500.
+   *
+   * The configured timeout covers a whole check, connection included, because
+   * the probe opens its own client. See `HEALTH_CHECK_TIMEOUT_MS` in
+   * `packages/config` for what that implies per deployment.
+   */
   public async readiness(
     client: PrismaClient,
     redis: Redis,
     timeoutMs = this.config.health.timeoutMs,
   ): Promise<HealthReadiness> {
     const [database, redisHealth] = await Promise.all([
-      withTimeout(checkDatabaseHealth(client, timeoutMs), timeoutMs, 'database'),
+      checkDatabaseHealth(client, timeoutMs),
       this.checkRedis(redis, timeoutMs),
     ]);
 

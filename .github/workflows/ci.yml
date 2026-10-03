@@ -139,28 +139,23 @@ jobs:
           docker compose -f infrastructure/docker/docker-compose.dev.yml config --quiet
           docker compose -f infrastructure/docker/docker-compose.test.yml config --quiet
 
-      # PHASE 02 exit criteria cannot be proven without a real PostgreSQL, and the
-      # development machine here has none. Applying the migration against the
-      # service container is what actually proves the DDL and the hand-written
-      # constraints are valid, that the seed runs and that the API reports ready.
-      - name: Apply migrations against real PostgreSQL
-        env:
-          DATABASE_URL: postgresql://delivery:delivery@localhost:5432/deliveryuy_test
-        run: |
-          pnpm run db:generate
-          pnpm --filter @deliveryuy/database exec prisma migrate deploy
-          pnpm --filter @deliveryuy/database exec prisma migrate status
-
-      # Run twice on purpose: the seed must be idempotent, and the development
-      # accounts it creates must not be duplicated or have their password hash
-      # rewritten (which would invalidate the credentials a developer is using).
+      # Everything below is one script on purpose. It is the same script a
+      # developer runs against local endpoints, so "green on CI" and "green here"
+      # are decided by the same code instead of by two lists that drift.
+      #
       # The credentials are declared here rather than defaulted inside the seed:
       # a committed default password would be a committed backdoor.
-      - name: Seed reference data and development accounts, verify idempotency
+      - name: Verify infrastructure criteria
         env:
           DATABASE_URL: postgresql://delivery:delivery@localhost:5432/deliveryuy_test
-          APP_ENV: ci
-          NODE_ENV: ci
+          REDIS_URL: redis://localhost:6379
+          JWT_ACCESS_SECRET: ci-access-secret-0123456789abcdef0123456789
+          JWT_REFRESH_SECRET: ci-refresh-secret-0123456789abcdef0123456789
+          APP_ENV: test
+          NODE_ENV: test
+          API_PORT: '3000'
+          LOG_LEVEL: info
+          CI: 'true'
           SEED_ADMIN_EMAIL: admin@ci.deliveryuy.local
           SEED_ADMIN_PASSWORD: ci-only-admin-password-0123456789
           SEED_MERCHANT_EMAIL: merchant@ci.deliveryuy.local
@@ -170,47 +165,5 @@ jobs:
           SEED_CUSTOMER_EMAIL: customer@ci.deliveryuy.local
           SEED_CUSTOMER_PASSWORD: ci-only-customer-password-0123456789
         run: |
-          pnpm run db:seed
-          node packages/database/scripts/assert-seeded-users.mjs --snapshot "$RUNNER_TEMP/seed-1.json"
-          pnpm run db:seed
-          node packages/database/scripts/assert-seeded-users.mjs --snapshot "$RUNNER_TEMP/seed-2.json"
-
-      # The Prisma auth adapters and the Redis rate limiter cannot be proven with
-      # test doubles: they depend on a partial functional index, a conditional
-      # `updateMany` losing a race, transaction rollback after a thrown error and
-      # a Lua script running as one atomic step inside Redis (ADR-016).
-      - name: Auth adapter and Redis integration tests
-        env:
-          DATABASE_URL: postgresql://delivery:delivery@localhost:5432/deliveryuy_test
-          REDIS_URL: redis://localhost:6379
-          JWT_ACCESS_SECRET: ci-access-secret-0123456789abcdef0123456789
-          JWT_REFRESH_SECRET: ci-refresh-secret-0123456789abcdef0123456789
-          CI: 'true'
-        run: |
-          pnpm run test:integration
-          # Every spec skips itself when its dependency is missing, so a green
-          # run alone does not prove anything executed. Assert the count.
-          node scripts/assert-integration-report.mjs
-
-      - name: Readiness probe against real infrastructure
-        env:
-          APP_ENV: test
-          NODE_ENV: test
-          DATABASE_URL: postgresql://delivery:delivery@localhost:5432/deliveryuy_test
-          REDIS_URL: redis://localhost:6379
-          JWT_ACCESS_SECRET: ci-access-secret-0123456789abcdef0123456789
-          JWT_REFRESH_SECRET: ci-refresh-secret-0123456789abcdef0123456789
-          API_PORT: '3000'
-          LOG_LEVEL: info
-        run: |
-          node services/api/dist/main.js &
-          API_PID=$!
-          for attempt in $(seq 1 30); do
-            if curl -fsS "http://127.0.0.1:3000/api/v1/health/live" > /dev/null; then
-              break
-            fi
-            sleep 1
-          done
-          curl -fsS "http://127.0.0.1:3000/api/v1/health/live"
-          curl -fsS "http://127.0.0.1:3000/api/v1/health/ready"
-          kill "$API_PID"
+          pnpm run build
+          node scripts/verify-infrastructure.mjs --from 1

@@ -34,11 +34,13 @@
     "infra:down": "docker compose -f infrastructure/docker/docker-compose.dev.yml down",
     "infra:test": "docker compose -f infrastructure/docker/docker-compose.test.yml up -d",
     "infra:test:down": "docker compose -f infrastructure/docker/docker-compose.test.yml down -v",
+    "infra:verify": "node scripts/verify-infrastructure.mjs",
     "verify": "pnpm run lint && pnpm run typecheck && pnpm run build:admin && pnpm run test && pnpm run format:check",
     "flutter:check": "node scripts/flutter-check.mjs",
     "verify:all": "pnpm run verify && pnpm run flutter:check"
   },
   "devDependencies": {
+    "@deliveryuy/config": "workspace:*",
     "@deliveryuy/eslint-config": "workspace:*",
     "@eslint/js": "^9.17.0",
     "@types/node": "^22.10.2",
@@ -53,6 +55,7 @@
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.1",
     "vite": "^5.4.21",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "yaml": "^2.9.1"
   }
 }

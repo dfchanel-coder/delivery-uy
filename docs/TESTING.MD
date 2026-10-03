@@ -27,11 +27,27 @@ Test:
 - payments
 - delivery
 - settlements
+- the readiness probe, which reaches PostgreSQL and Redis through its own
+  clients
 
 They run against a real PostgreSQL (and Redis when the behaviour involves it)
 provided by `infrastructure/docker/docker-compose.test.yml`. Mocking
 `PrismaClient` for repository tests is forbidden: constraints, transactions and
 numeric behaviour only exist in PostgreSQL.
+
+#### Isolation
+
+All integration specs share **one schema** in the database named by
+`DATABASE_URL`, and truncate between tests through the shared helpers in
+`services/api/src/testing/infrastructure.ts`. The suite runs with
+`pool: 'forks'` and `singleFork: true`, so specs cannot interleave.
+
+Per-file schema isolation was considered and rejected; ADR-023 records why.
+Briefly: Prisma migrations apply per database rather than per schema, so
+isolating each file means deploying the migration history once per file, to
+obtain isolation that a single fork already guarantees. The consequence to keep
+in mind is that **integration specs cannot be run in parallel** without
+superseding ADR-023 first.
 
 #### The unit/integration split
 
@@ -56,15 +72,20 @@ so "skipped" would otherwise look like "passed". Two things prevent that:
   if a spec file is missing from the report, or if fewer than
   `MIN_EXECUTED` assertions ran.
 
+The script discovers the expected spec files from the filesystem rather than from
+a hard-coded list, and compares the two sets **in both directions**. A list only
+checks that what it names is present, so a spec added without registering it would
+be silently unproven while the list read as coverage that does not exist.
+
 Run the assertion by hand after a local `test:integration` to see the real state:
 
 ```bash
 node scripts/assert-integration-report.mjs
 ```
 
-A developer without Docker gets 3 executed and 39 skipped, and the script exits
-`1` naming the specs. That is the correct outcome: the coverage is unproven, not
-green.
+A developer without Docker gets 3 executed and the rest skipped, and the script
+exits `1` naming the specs. That is the correct outcome: the coverage is
+unproven, not green.
 
 `services/api/src/testing/infrastructure.ts` is the shared guard
 (`withDatabase`, `withRedis`, `openRedis`, `truncateAuthTables`,
@@ -75,7 +96,42 @@ marks the test skipped but does **not** stop the body from running.
 
 Pool note: the integration suite runs `pool: 'forks'` with `singleFork` because
 `PRISMA_RESET_DATABASE`-style truncation and Redis key cleanup are not safe to
-run concurrently against one database.
+run concurrently against one database. `test/infrastructure/integration-suite.spec.ts`
+asserts both the single fork and the roots the report script walks, so relaxing
+either one fails a spec instead of producing flaky runs.
+
+#### Verifying the infrastructure criteria end to end
+
+`scripts/verify-infrastructure.mjs` is the single list of everything that needs
+real infrastructure to be believed, in the order it must happen:
+
+1. `prisma generate`
+2. `prisma migrate deploy` - the DDL and the hand-written constraints apply to a
+   real server
+3. `prisma migrate status` - nothing is left pending
+4. seed twice, asserting idempotency and real Argon2id digests
+5. the integration suite, plus the skip assertion
+6. boot the API and read both health probes - PHASE 01 exit criterion 5
+
+It is what the CI `integration` job runs, so "green on CI" and "green locally"
+are decided by the same code. Run it against any reachable endpoints:
+
+```powershell
+$env:DATABASE_URL = 'postgresql://delivery:delivery@localhost:5432/deliveryuy_test'
+$env:REDIS_URL = 'redis://localhost:6379'
+pnpm run infra:verify
+```
+
+`--from <n>` starts at a step for iteration; every earlier step is reported as
+**not proved** by that run, so a partial run cannot be mistaken for a full one.
+
+Two things this script does not settle, and which stay open until the CI job runs:
+
+- the compose files bringing those servers up (no container runtime needed by the
+  script, only reachable endpoints);
+- the health budget. Step 6 prints `HEALTH_CHECK_TIMEOUT_MS`, because the probe
+  opens its own client and a host where connecting is slow needs a larger budget
+  than the default. See `HEALTH_CHECK_TIMEOUT_MS` in `.env.example`.
 
 #### Running the suite without Docker
 
@@ -161,6 +217,28 @@ schema, and no relation cascades towards money or audit history. They need no
 database, so a convention regression fails the ordinary suite instead of waiting
 for the next migration.
 
+### Repository contract tests
+
+`test/infrastructure/` checks the files that state the project's promises but are
+never executed by `pnpm test`. They run in the ordinary suite, need no
+infrastructure, and read their subjects as structured data rather than as text.
+
+| Spec | Holds |
+| --- | --- |
+| `compose.spec.ts` | both compose files parse; every service pins an image and a healthcheck; no container name or host port is shared between the development and test stacks; the test stack cannot inherit state; the bootstrap mount source exists; every interpolated variable is documented in `.env.docker.example` and every documented one is used; the published PostgreSQL and Redis match the `DATABASE_URL` and `REDIS_URL` in `.env.example` |
+| `ci-workflow.spec.ts` | every job is bounded in time; the workflow is read-only; no step may fail quietly; every action is pinned to a released version; every `pnpm` script and every file the workflow names exists; every variable it sets is read by the configuration schema, or is allowlisted with the file that owns it; the values satisfy the real schema; the `integration` job starts real service containers with healthchecks and runs the shared verification script; no `${{ secrets.* }}` |
+| `integration-suite.spec.ts` | the report script walks the same roots the integration config collects, collects only integration specs, and the suite stays on a single fork |
+
+Two of these checks exist because the corresponding failure is silent. A bind
+mount whose source is missing becomes an empty directory and the container starts
+healthfully having skipped its bootstrap. A port published by compose that
+disagrees with the documented `DATABASE_URL` produces an API that cannot connect
+to its own stack. Neither is visible until someone runs the stack.
+
+**What they cannot prove.** That the images start and become healthy. That needs a
+container runtime, which is why `scripts/verify-infrastructure.mjs` takes
+reachable endpoints rather than running compose itself.
+
 ---
 
 ## How the suite runs
@@ -173,6 +251,7 @@ pnpm test:coverage
 
 pnpm run test:integration        # *.integration.spec.ts against real PostgreSQL + Redis
 node scripts/assert-integration-report.mjs   # fails if anything was skipped
+pnpm run infra:verify            # migrations, seed, integration suite and health probes in one run
 
 pnpm run flutter:check # flutter analyze + flutter test in every Dart workspace
 pnpm run verify:all    # both gates

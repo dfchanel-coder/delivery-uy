@@ -14,8 +14,8 @@ CURRENT_MODULE: Authentication - Argon2id hashing, access and refresh tokens, se
 - Product, stack, roles and order state machine defined
 - ARCHITECTURE.md, DATABASE.md, SECURITY.md, LEGAL.md finalized
 - docs/ERD.md, docs/SCHEMA_PROPOSAL.md, docs/MODULE_BOUNDARIES.md
-- ADR-001 ... ADR-022 accepted (ADR-004 and ADR-015 carry
-  `LEGAL_REVIEW_REQUIRED`)
+- ADR-001 ... ADR-023 accepted (ADR-004 and ADR-015 carry
+  `LEGAL_REVIEW_REQUIRED`; ADR-023 supersedes the isolation bullet of ADR-016)
 
 ### PHASE 01 - Monorepo (foundation slice)
 
@@ -352,17 +352,19 @@ Run against a local sink outside the repository (not a committed fixture), with
 ## IN_PROGRESS
 
 - PHASE 03 - Authentication: implementation, documentation, `pnpm verify` exit 0
-  (553 unit/API tests), the Dart gate exit 0, the integration suite against real
-  PostgreSQL and Redis (49 executed, 0 skipped, 6 files) and a real SMTP
-  conversation for both delivered messages all pass. One item keeps the phase
+  (596 unit/API tests across 22 files), the Dart gate exit 0, the integration suite
+  against real PostgreSQL and Redis (51 executed, 0 skipped, 7 files) and a real
+  SMTP conversation for both delivered messages all pass. One item keeps the phase
   open:
   - the CI `integration` job has never run on GitHub, so the compose-based proof
     is still outstanding (see BLOCKED). No remote is configured on this
     repository.
 - PHASE 02 - Database: `0001_init` applied, the seed proven idempotent and the
-  database integration specs green locally. The compose-based proof in CI is
-  still outstanding (ADR-019).
-- PHASE 01 - Monorepo: only the Docker-backed verification of exit criterion 3 is
+  database integration specs green locally, all through
+  `scripts/verify-infrastructure.mjs`. The compose-based proof in CI is still
+  outstanding (ADR-019).
+- PHASE 01 - Monorepo: exit criterion 5 is now verified against real
+  infrastructure. Only the Docker-backed verification of exit criterion 3 is
   outstanding (see BLOCKED).
 - Mobile: `login`, `register`, `logout`, `verify-email` and secure session
   persistence exist end to end and are proven on the emulator (ADR-021).
@@ -392,7 +394,14 @@ the repository**, in the temporary scratch directory, as development tools only:
 - `embedded-postgres` starts a PostgreSQL 16 cluster on `127.0.0.1:5432`. The
   version matches the `postgres:16` image the compose files use; a different major
   version could make a migration pass locally and fail in CI.
-- `redis-memory-server` starts a real Redis on `127.0.0.1:6379`.
+- `redis-memory-server` starts a Redis on `127.0.0.1:6379`. **On this Windows
+  host it resolves to Memurai 8.2.0, not Redis 7.** `redis-memory-server` downloads
+  a real Redis binary on macOS and Linux but falls back to Memurai on Windows, and
+  Memurai is a Redis-API-compatible server rather than Redis. The Lua rate
+  limiter was therefore proven against a compatible implementation at a different
+  major version. `docs/TESTING.MD` already requires local versions to match the
+  compose ones, so this is a genuine gap in the local evidence; the CI
+  `integration` job is what closes it.
 
 Nothing was added to the repository for this, and the compose files remain the
 documented infrastructure. The only lesson worth keeping is operational: on
@@ -404,32 +413,80 @@ the orphaned children.
 
 ### Verified against that local infrastructure
 
-- `prisma migrate deploy` applies `0001_init` cleanly to both `deliveryuy` and
-  `deliveryuy_test`, and `prisma migrate status` reports the schema up to date.
-  This closes the PHASE 02 apply-migration criterion.
-- The seed runs twice: 4 users on the first run, 0 on the second, with
-  `assert-seeded-users.mjs` green both times.
-- The integration suite reports **49 executed, 0 skipped, 6 files**, and
-  `scripts/assert-integration-report.mjs` exits 0. The five Prisma auth adapters
-  and the `RedisRateLimiter` are therefore proven against real PostgreSQL and
-  real Redis.
-- The API was run and exercised over HTTP: `/health/live`, `/health/ready`
-  (`200`, `database` and `redis` up), `POST /auth/login` (`200`, JWT access
-  token, opaque `rt_…` refresh token, `expiresIn 899`, roles `['CUSTOMER']`),
-  `POST /auth/register`, `POST /auth/refresh` (rotated token), `GET /auth/me`,
-  and a wrong password returning `401` with the error envelope.
+All of it is now behind one command, `scripts/verify-infrastructure.mjs`, which is
+also what the CI `integration` job runs. On 2026-10-02 it passed all six steps
+against the local endpoints:
+
+1. `prisma generate`;
+2. `prisma migrate deploy` applies `0001_init` cleanly and
+   `prisma migrate status` reports "No pending migrations to apply". This closes
+   the PHASE 02 apply-migration criterion;
+3. the seed runs twice: 4 users on the first run, 0 on the second, with
+   `assert-seeded-users.mjs` green both times and every seeded password column
+   holding a real Argon2id PHC digest;
+4. the integration suite reports **51 executed, 0 skipped, 7 files**, and
+   `scripts/assert-integration-report.mjs` exits 0. The five Prisma auth adapters,
+   the `RedisRateLimiter` and the readiness probe are therefore proven against
+   real PostgreSQL and Redis;
+5. the compiled API boots and answers both probes over HTTP: `live 200`,
+   `ready 200`, `database=up in 2162 ms`, `redis=up in 15 ms`. **This closes
+   PHASE 01 exit criterion 5.**
+
+The API was also exercised by hand over HTTP: `POST /auth/login` (`200`, JWT
+access token, opaque `rt_…` refresh token, `expiresIn 899`, roles `['CUSTOMER']`),
+`POST /auth/register`, `POST /auth/refresh` (rotated token), `GET /auth/me`, and
+a wrong password returning `401` with the error envelope.
+
+### Defects found while verifying, all fixed
+
+- **The readiness probe could answer `500` instead of `503`.** `HealthService.readiness`
+  wrapped `checkDatabaseHealth` in a second timeout. Both timers bounded the same
+  work with the same message, and the loser of that race rejected instead of
+  returning a verdict, so a database slower than its budget reached the client as
+  an internal error. The outer wrapper is gone: `checkDatabaseHealth` bounds
+  itself and returns a verdict, so the probe cannot reject. Two unit tests pin it,
+  one at the service and one asserting the controller still answers
+  `ServiceUnavailableException`.
+- **`PROJECT_STATE.md` claimed a "real Redis".** On this host it is Memurai; see
+  the unblocking note above. Corrected.
+- **ADR-016 was contradicted by the code.** It promised one isolated schema per
+  test file via `TEST_SCHEMA`; the implementation has always used one schema with
+  truncation and a single fork. `TEST_SCHEMA` appeared nowhere in the code.
+  **ADR-023** supersedes that bullet with the reasoning, and the comment in
+  `docker-compose.test.yml` that repeated the claim was corrected.
+- **`EXPECTED_FILES` in `assert-integration-report.mjs` had rotted.** It listed
+  five spec files while seven exist, and it only checked for missing names, so
+  adding a spec without registering it was silently unproven. The script now
+  discovers the specs from the filesystem and compares both directions.
+- **`TEST_POSTGRES_PORT` and `TEST_REDIS_PORT` were undocumented.** The test stack
+  interpolated them with defaults and no example file declared them, so an
+  operator whose port was taken had a knob nobody had written down. Both are now
+  in `.env.docker.example`.
 
 ### Still unproven
 
 - **Docker Compose itself.** The `integration` job remains the only place
   `docker compose` bringing up both services with healthchecks is exercised, so
   PHASE 01 exit criterion 3 stays unverified locally. Reaching equivalent
-  endpoints by other means proves the code, not the compose file.
-- **`HEALTH_CHECK_TIMEOUT_MS`.** The default of 2000 ms has almost no margin on
-  this host: a cold Prisma connection takes about 2.3 s, so the readiness probe
-  consumed its entire budget. The local `.env` raises it to 5000 ms. The default
-  was **not** changed, because raising it globally would hide a real regression
-  behind a longer wait; this is a note for whoever tunes it per deployment.
+  endpoints by other means proves the code, not the compose file. What is now
+  verified statically, by `test/infrastructure/compose.spec.ts`: both files parse,
+  every service pins an image and a real healthcheck, no container name or host
+  port is shared between the stacks, the test stack cannot inherit state, the
+  bootstrap bind-mount source exists, every interpolated variable is documented
+  and every documented variable is used, and the published PostgreSQL and Redis
+  are the ones `.env.example` tells the API to connect to.
+- **`HEALTH_CHECK_TIMEOUT_MS`.** The default of 2000 ms is not enough on this
+  host: a cold Prisma connect measures about 2.16 s, so the probe spent its whole
+  budget and answered `degraded` against a healthy database. The local `.env`
+  raises it to 5000 ms. The default was **not** changed, because raising it
+  globally would hide a real regression behind a longer wait, and a budget far
+  above what a real connection costs can exceed an orchestrator's own probe
+  timeout and fail regardless. The variable now documents that the budget covers
+  the cold connect the probe forces, and
+  `scripts/verify-infrastructure.mjs` prints it so a failed health step is
+  diagnosable from the output alone.
+- **Redis 7 specifically.** The Lua rate limiter has been proven against a
+  Redis-API-compatible server, not against `redis:7-alpine`.
 
 ---
 

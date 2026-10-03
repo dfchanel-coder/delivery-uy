@@ -57,24 +57,40 @@ Exit criteria (all met):
 
 ## PHASE 01 - Monorepo
 
-Status: IN_PROGRESS
+Status: IN_PROGRESS - one exit criterion open, for a reason outside the code
 
-Verified on 2026-10-01: `pnpm install`, `pnpm lint`, `pnpm typecheck`,
-`pnpm build`, `pnpm build:admin`, `pnpm test` (76 tests) and `pnpm format:check`
-all pass; `pnpm run flutter:check` passes (24 Dart tests, analyzer clean in
-`packages/dart/core`, `apps/customer`, `apps/merchant`, `apps/driver`).
-`services/api` answers the liveness probe without infrastructure, and the admin
-panel (`next build`, `next start`) renders real API state including the degraded
-readiness path.
+Verified on 2026-10-02: `pnpm install`, `pnpm lint`, `pnpm typecheck`,
+`pnpm build`, `pnpm build:admin`, `pnpm test` (596 tests across 22 files) and
+`pnpm format:check` all pass; `pnpm run flutter:check` passes (130 Dart tests,
+analyzer clean in `packages/dart/core`, `apps/customer`, `apps/merchant`,
+`apps/driver`). `services/api` answers the liveness probe without
+infrastructure, and the admin panel (`next build`, `next start`) renders real API
+state including the degraded readiness path.
 
-Remaining exit criteria:
+Remaining exit criterion:
 
 3. `docker compose -f infrastructure/docker/docker-compose.dev.yml up -d`
-   provides PostgreSQL and Redis with healthchecks (files written, run blocked:
-   no Docker on the development machine; CI validates them with service
-   containers)
-5. `GET /api/v1/health/ready` with PostgreSQL and Redis running (the degraded
-   `503` path is verified locally and by unit tests)
+   provides PostgreSQL and Redis with healthchecks.
+
+**Criterion 5 is now verified** against real PostgreSQL and Redis by
+`scripts/verify-infrastructure.mjs`, which boots the compiled API and reads both
+probes over HTTP: `live 200`, `ready 200`, `database=up`, `redis=up`.
+
+Criterion 3 is the only thing left, and it needs a container runtime. What is
+verified without one, by `test/infrastructure/compose.spec.ts`: both files parse
+as compose documents; every service pins an image and a healthcheck with retries;
+no container name or host port is shared between the two stacks; the test stack
+uses `tmpfs` so a run cannot inherit state; the bootstrap bind-mount source
+exists on disk (a missing source silently becomes an empty directory and the
+container starts healthfully having skipped its bootstrap); every interpolated
+variable is documented in `.env.docker.example` and every documented variable is
+used; and the PostgreSQL and Redis the dev stack publishes are the ones
+`.env.example` tells the API to connect to.
+
+That check found one real gap while being written: `TEST_POSTGRES_PORT` and
+`TEST_REDIS_PORT` were interpolated with defaults but documented nowhere, so an
+operator whose port was taken had a knob no file mentioned. Both are now in
+`.env.docker.example`.
 
 All other exit criteria are met, including the four application skeletons:
 `apps/admin` (Next.js, HTTP client, widget-free SSR pages, 13 unit tests) and the
@@ -145,13 +161,25 @@ Implemented on 2026-10-01:
   in production, plus the development accounts added in PHASE 03 (real Argon2id
   hashes, credentials from `SEED_*`)
 
-Verified locally: `prisma validate`, `prisma generate`, `migration:build`
-(byte-identical on rebuild), typecheck, lint and the vitest suite.
+Verified locally against a real PostgreSQL 16 server by
+`scripts/verify-infrastructure.mjs` (steps 2 to 5), which is the same script the
+CI `integration` job runs:
 
-Not verified locally: applying the migration, running the seed and the database
-integration tests, because no PostgreSQL can run on this machine (see
-`PROJECT_STATE.md`, BLOCKED). The CI `integration` job performs them; no
-migration is considered applied until that job is green.
+- `prisma validate`, `prisma generate`, `migration:build` (byte-identical on
+  rebuild), typecheck, lint and the vitest suite
+- `prisma migrate deploy` applies cleanly, and `prisma migrate status` reports
+  "No pending migrations to apply"
+- the seed runs twice with no duplicated row and no rewritten password hash
+  (`assert-seeded-users.mjs`), and every seeded password column holds a real
+  Argon2id PHC digest
+- the database integration specs pass against the real server, including the
+  partial functional index, the conditional `updateMany` losing a race, and
+  transaction rollback after a thrown error
+
+The PostgreSQL used locally is a native Windows build of the same major version
+the compose file pins (`postgres:16-alpine`), not the image itself. Applying the
+migration *inside the container* is what the CI `integration` job does and is the
+one remaining unverified step for this phase.
 
 Core entities:
 
@@ -280,19 +308,34 @@ public endpoint; and `NodemailerMailTransport` refused port 587 with credentials
 which is the ordinary STARTTLS submission path the configuration schema
 deliberately allows.
 
-Verified locally: `pnpm run lint`, `pnpm run build`, `pnpm run typecheck`,
-`pnpm run build:admin`, `pnpm run format:check`, `pnpm verify` exit 0, 553 vitest
-tests across 19 files, `pnpm run flutter:check` exit 0 with 130 Dart tests, and
-49 integration tests across 6 files with 0 skipped against real PostgreSQL and
-Redis. Both message flows were additionally verified by hand against a real SMTP
-conversation; see `SECURITY.md` for what was observed.
+Verified locally on 2026-10-02: `pnpm run lint`, `pnpm run build`,
+`pnpm run typecheck`, `pnpm run build:admin`, `pnpm run format:check`,
+`pnpm verify` exit 0, 596 vitest tests across 22 files, `pnpm run flutter:check`
+exit 0 with 130 Dart tests, and 51 integration tests across 7 files with 0
+skipped against real PostgreSQL and Redis. Both message flows were additionally
+verified by hand against a real SMTP conversation; see `SECURITY.md` for what was
+observed.
+
+The infrastructure-dependent parts of this phase are now verified through
+`scripts/verify-infrastructure.mjs`, the same script the CI `integration` job
+runs: migrations apply, the seed is idempotent, all seven integration spec files
+execute rather than skip, and the booted API answers both health probes.
 
 Remaining before this phase can close:
 
-1. the CI `integration` job green, which is the only place the five Prisma
-   adapters, the Redis limiter, `prisma migrate deploy` and the seed run inside
-   the compose stack (see `PROJECT_STATE.md`, BLOCKED). No remote is configured
-   on this repository, so it has never run.
+1. the CI `integration` job green, which is the only place the Prisma adapters,
+   the Redis limiter, `prisma migrate deploy` and the seed run **inside the
+   compose stack** rather than against endpoints reached another way (see
+   `PROJECT_STATE.md`, BLOCKED). No remote is configured on this repository, so it
+   has never run.
+
+One caveat on that job even once it runs: the Redis used locally is
+`redis-memory-server`, which downloads a real Redis binary on macOS and Linux but
+falls back to **Memurai** on Windows. The Lua rate limiter has therefore been
+proven against a Redis-API-compatible server at a different major version, not
+against `redis:7-alpine`. `docs/TESTING.MD` already requires local versions to
+match the compose ones, so this is a real gap in the local evidence and not a
+detail; the CI job is what closes it.
 
 ---
 
