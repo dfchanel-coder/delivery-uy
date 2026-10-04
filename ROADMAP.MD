@@ -57,9 +57,9 @@ Exit criteria (all met):
 
 ## PHASE 01 - Monorepo
 
-Status: IN_PROGRESS - two exit criteria open, and the CI that is meant to close
-them ran for the first time on 2026-10-03 and found two prerequisites that were
-satisfied by convention rather than declared (ADR-024)
+Status: IN_PROGRESS - the compose boot criterion passed on CI run #2; the full
+infrastructure verification remains open after that run exposed a concurrent
+login-lockout lost update (fixed locally, awaiting CI rerun)
 
 Verified on 2026-10-02: `pnpm install`, `pnpm lint`, `pnpm typecheck`,
 `pnpm build`, `pnpm build:admin`, `pnpm test` (596 tests across 22 files) and
@@ -90,41 +90,43 @@ them were proven load-bearing by mutating the workflow: dropping `--wait`, and
 changing the published port in the compose file, each failed exactly the contract
 meant to catch it. See `docs/TESTING.MD` "What CI proves".
 
-Still unproven, and now for a different reason than before. Run #1 (2026-10-03)
-is the workflow's first log ever, and the `compose` job failed on `Build backend`
-before it reached its first step, so no container has been started by this
-repository anywhere. It failed because the root `build` compiled the project
-references with `tsc -b` without generating the Prisma client that
-`packages/database` generates inside its own `build` script - a prerequisite that
-had been satisfied on the development machine by leftover `node_modules` and was
-therefore invisible locally. The same run found `Lint` depending on the same kind
-of thing, since typed linting resolves types through the compiled output. **ADR-024**
-makes each script declare its own prerequisites; both are proven fixed on this host
-from a wiped tree. PHASE 01 criteria 3 and 5 are decided by the next run, not by
-this one.
+Run #1 (2026-10-03) failed at build/lint before starting any containers. The root
+`build` compiled project references with `tsc -b` without generating the Prisma
+client that `packages/database` generates inside its own `build` script; lint
+also needed compiled `.d.ts` files. **ADR-024** makes each script declare those
+prerequisites. The next run proved both fixes on a clean Linux runner.
 
 3. `docker compose -f infrastructure/docker/docker-compose.dev.yml up -d`
    provides PostgreSQL and Redis with healthchecks.
 
-`scripts/verify-infrastructure.mjs` has verified the compiled API and both probes
-against local infrastructure: `live 200`, `ready 200`, `database=up`,
-`redis=up`. PostgreSQL matches the image major version, but the local Redis is
-Memurai 8.2.10, not the pinned `redis:7-alpine`; the exact-version integration
-proof still needs CI. This is useful local evidence, not closure of the pinned
-infrastructure criterion.
+**Criterion 3 is now proven.** CI run #2 successfully ran both compose files:
+the test stack and development stack each passed `up -d --wait`. The development
+stack reported PostgreSQL 16.15 and Redis 7.4.11, matching the pinned major
+versions. This is the first time the repository has booted its documented stacks.
 
-Criterion 3 (our compose files boot and become healthy) also remains open. The
-new `compose` CI job is designed to decide it, but run #1 failed in `Build backend`
-before the first `docker compose` command. What is verified without a container
-runtime, by `test/infrastructure/compose.spec.ts`: both files parse as compose
-documents; every service pins an image and a healthcheck with retries; no
-container name or host port is shared between the two stacks; the test stack uses
-`tmpfs` so a run cannot inherit state; the bootstrap bind-mount source exists on
-disk (a missing source silently becomes an empty directory and the container
-starts healthfully having skipped its bootstrap); every interpolated variable is
-documented in `.env.docker.example` and every documented variable is used; and
-the PostgreSQL and Redis the dev stack publishes are the ones `.env.example` tells
-the API to connect to.
+The same run passed build, lint, typecheck, formatting, admin build and all 685
+unit/API tests, but the end-to-end infrastructure script stopped at integration
+test 5/6. Against both the development compose services and GitHub's own service
+containers, one of 51 PostgreSQL integration tests failed:
+`counts concurrent failures without losing increments` expected six simultaneous
+failed-login increments and got four. The test was right: the repository read the
+counter and wrote `current + 1`, so concurrent transactions at `READ COMMITTED`
+lost updates. `PrismaUserRepository` now increments the column atomically in
+PostgreSQL and holds the row lock through the lockout-threshold decision. The
+focused integration spec passes locally after the fix; the full pinned-service CI
+run remains outstanding, and PHASE 01 criterion 5 is not claimed complete until
+the integration suite and API health probes pass there.
+
+What is verified statically without a local container runtime, by
+`test/infrastructure/compose.spec.ts`: both files parse as compose documents;
+every service pins an image and a healthcheck with retries; no container name or
+host port is shared between the two stacks; the test stack uses `tmpfs` so a run
+cannot inherit state; the bootstrap bind-mount source exists on disk (a missing
+source silently becomes an empty directory and the container starts healthfully
+having skipped its bootstrap); every interpolated variable is documented in
+`.env.docker.example` and every documented variable is used; and the PostgreSQL
+and Redis the dev stack publishes are the ones `.env.example` tells the API to
+connect to.
 
 That check found one real gap while being written: `TEST_POSTGRES_PORT` and
 `TEST_REDIS_PORT` were interpolated with defaults but documented nowhere, so an
@@ -258,8 +260,9 @@ Add:
 
 ## PHASE 03 - Authentication
 
-Status: IN_PROGRESS - one exit criterion outstanding (the CI `integration` job,
-which has never run because this repository has no remote). Every other
+Status: IN_PROGRESS - one exit criterion outstanding: a green CI integration
+run. Run #2 reached the pinned PostgreSQL/Redis suite but found the concurrent
+login-lockout lost update (fixed locally; full suite awaits rerun). Every other
 criterion in AGENTS.md section 65 is met, including the frontend one that the
 password recovery slice closed: every endpoint in the phase has a screen in
 `apps/customer`. Everything else in the phase is implemented, documented and
@@ -394,23 +397,18 @@ execute rather than skip, and the booted API answers both health probes.
 
 Remaining before this phase can close:
 
-1. the CI `integration` job green, which is the only place the Prisma adapters,
-   the Redis limiter, `prisma migrate deploy` and the seed run **inside the
-   compose stack** rather than against endpoints reached another way (see
-   `PROJECT_STATE.md`, BLOCKED). No remote is configured on this repository, so it
-   has never run.
+1. A green CI integration run after fixing the concurrent counter update. Run #2
+   did execute all 51 specs against PostgreSQL 16.15 and Redis 7.4.11; 50 passed,
+   including the Redis rate limiter. `PrismaUserRepository` now performs the
+   failed-login increment atomically, and the full local infrastructure suite
+   passes after the fix (51 tests, 0 skipped, both health probes green). CI must
+   prove the full suite and API health probes against the pinned services.
 
-One caveat on that job even once it runs: the Redis used locally is
-`redis-memory-server`, which downloads a real Redis binary on macOS and Linux but
-falls back to **Memurai** on Windows. The Lua rate limiter has therefore been
-proven against a Redis-API-compatible server at a different major version, not
-against `redis:7-alpine`. `docs/TESTING.MD` already requires local versions to
-match the compose ones, so this is a real gap in the local evidence and not a
-detail; the CI job is what closes it. Since this was written the gap stopped being
-something a reader has to remember: `scripts/verify-infrastructure.mjs` asks each
-server for its version and prints it beside the pin, so the run above shows
-`Redis: 8.2.10 ... (compose pins redis:7-alpine)` and says it was not proven
-against the reference version.
+The local Redis caveat remains: Windows `redis-memory-server` provides Memurai,
+not `redis:7-alpine`. CI run #2 removes the version uncertainty: the verification
+script reported the actual PostgreSQL 16.15 and Redis 7.4.11 images, so the Redis
+rate limiter was exercised against the pinned major. The suite as a whole is not
+yet green because of the independent PostgreSQL counter race.
 
 ---
 

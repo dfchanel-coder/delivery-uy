@@ -195,9 +195,10 @@ describe('PrismaUserRepository (integration)', () => {
       const id = await seedUser(client, { email: 'race@example.com' });
       const now = new Date('2026-05-01T12:00:00.000Z');
 
-      // Six parallel attempts against a threshold of five. The counter and the
-      // lock decision are one transaction, so the stored value must be exactly
-      // six and the lock must be applied.
+      // Six parallel attempts against a threshold of five. The counter update
+      // must be atomic in PostgreSQL: reading and writing `current + 1` in each
+      // transaction loses increments under contention. The stored value must be
+      // exactly six and the lock must be applied.
       await Promise.all(
         Array.from({ length: 6 }, () =>
           repository.registerFailedLogin({

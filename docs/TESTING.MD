@@ -407,16 +407,42 @@ deleting every `dist/` and `node_modules/.prisma` and running each script alone:
 after it. `test/infrastructure/toolchain-scripts.spec.ts` holds it as rules over
 the script map, so a script added later inherits the requirement.
 
-Neither criterion is closed by this. The `compose` job never reached its first
-step, so it still has never started a container.
+Run #1 closed no criterion because the `compose` job failed before starting a
+container. Run #2 changed that: both stacks passed `up -d --wait`, and the
+development compose stack reported PostgreSQL `16.15` and Redis `7.4.11`, matching
+the pinned major versions. PHASE 01 criterion 3 (the compose images start and
+become healthy) is now proven on GitHub Actions.
 
-After the fix, on 2026-10-03: `pnpm verify` passes (685 tests across 27 files),
+### The second run: CI found a real concurrent-write defect
+
+The infrastructure step continued after both stacks were healthy, applied
+migrations, checked migration status and ran the idempotent seed successfully.
+It then failed in the integration suite, identically against both the compose
+stack and GitHub's service containers:
+
+```text
+PrismaUserRepository (integration) > counts concurrent failures without losing increments
+expected 6, received 4
+```
+
+The test correctly exposed a lost update. `registerFailedLogin` read the attempt
+counter and wrote `current + 1` in separate SQL statements under PostgreSQL's
+default `READ COMMITTED` isolation. Concurrent transactions could read the same
+value and overwrite each other's increment, weakening the configured lockout.
+The repository now uses a database-side atomic increment and keeps the row lock
+through the threshold/lock decision. After the fix the complete local
+infrastructure script passes: 51 integration tests across 7 files, 0 skipped, and
+both API health probes (`live 200`, `ready 200`). The local Redis-compatible
+service is Memurai 8.2.10, not Redis 7.4.11; the full pinned-service suite and API
+health probes have not yet passed in CI and remain **not proven**.
+
+After the atomic fix, on 2026-10-04: `pnpm verify` passes (685 tests / 27 files),
 `pnpm run flutter:check` passes (153 Dart tests, analyzer clean in all four Dart
 workspaces), and `scripts/verify-infrastructure.mjs` passes all six steps,
 including 51 integration tests with 0 skipped and `live 200` / `ready 200`. The
-local database is PostgreSQL 16.14, but the local Redis-compatible server is
-Memurai 8.2.10, not the pinned `redis:7-alpine`. This is local evidence only: the
-CI build is still pending, and the exact Redis 7 proof remains **not proven**.
+local database is PostgreSQL 16.14; local Redis is Memurai 8.2.10, not the pinned
+`redis:7-alpine`. This local pass does not replace the full pinned-service CI
+rerun.
 
 The seed is verified by running it twice and comparing the second run against a
 snapshot of the first (`packages/database/scripts/assert-seeded-users.mjs`). A

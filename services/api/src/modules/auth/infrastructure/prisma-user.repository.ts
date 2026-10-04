@@ -194,27 +194,43 @@ export class PrismaUserRepository implements UserRepository {
     lockUntil: Date | null;
   }): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
+      // Let PostgreSQL increment the stored value under its row lock. Reading
+      // the counter and writing `current + 1` loses increments when concurrent
+      // transactions both read the same value at READ COMMITTED.
+      const incremented = await tx.user.updateMany({
+        where: { id: input.userId },
+        data: {
+          failedLoginAttempts: { increment: 1 },
+          updatedAt: input.now,
+        },
+      });
+
+      // The account was deleted before the atomic update.
+      if (incremented.count === 0) return;
+
+      // This transaction holds the row lock acquired by updateMany, so another
+      // failure cannot change the threshold decision before we set its lock.
       const current = await tx.user.findUnique({
         where: { id: input.userId },
         select: { failedLoginAttempts: true, lockedUntil: true },
       });
 
-      // The account was deleted between the read and this write.
+      // Defensive against a future change to the transaction's write path.
       if (current === null) return;
 
-      const attempts = current.failedLoginAttempts + 1;
       const lockIsActive =
         current.lockedUntil !== null && current.lockedUntil.getTime() > input.now.getTime();
-      const shouldLock = !lockIsActive && attempts >= input.maxAttempts && input.lockUntil !== null;
+      const shouldLock =
+        !lockIsActive &&
+        current.failedLoginAttempts >= input.maxAttempts &&
+        input.lockUntil !== null;
 
-      await tx.user.update({
-        where: { id: input.userId },
-        data: {
-          failedLoginAttempts: attempts,
-          lockedUntil: shouldLock ? input.lockUntil : current.lockedUntil,
-          updatedAt: input.now,
-        },
-      });
+      if (shouldLock) {
+        await tx.user.update({
+          where: { id: input.userId },
+          data: { lockedUntil: input.lockUntil, updatedAt: input.now },
+        });
+      }
     });
   }
 
