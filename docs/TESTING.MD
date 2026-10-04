@@ -433,16 +433,31 @@ The repository now uses a database-side atomic increment and keeps the row lock
 through the threshold/lock decision. After the fix the complete local
 infrastructure script passes: 51 integration tests across 7 files, 0 skipped, and
 both API health probes (`live 200`, `ready 200`). The local Redis-compatible
-service is Memurai 8.2.10, not Redis 7.4.11; the full pinned-service suite and API
-health probes have not yet passed in CI and remain **not proven**.
+service is Memurai 8.2.10, not Redis 7.4.11; this local pass alone is not proof
+against the pinned services.
 
 After the atomic fix, on 2026-10-04: `pnpm verify` passes (685 tests / 27 files),
 `pnpm run flutter:check` passes (153 Dart tests, analyzer clean in all four Dart
 workspaces), and `scripts/verify-infrastructure.mjs` passes all six steps,
 including 51 integration tests with 0 skipped and `live 200` / `ready 200`. The
 local database is PostgreSQL 16.14; local Redis is Memurai 8.2.10, not the pinned
-`redis:7-alpine`. This local pass does not replace the full pinned-service CI
-rerun.
+`redis:7-alpine`.
+
+### The third run: all four CI jobs green
+
+Commit `21aec62` (2026-10-04) passed all four jobs. The clean-checkout gate passed
+lint, typecheck, Prisma validation, admin/backend builds, formatting and 685
+unit/API tests across 27 files. The Dart gate passed 153 tests with all four
+workspaces analyzer-clean. Both the `compose` job and the independent
+`integration` job passed the complete infrastructure script: 6/6 steps, 51 tests
+across 7 files, 0 skipped, `live 200`, `ready 200`. Both reported PostgreSQL
+16.15 and Redis 7.4.11. The `compose` job also passed `up -d --wait` for both the
+test and development stacks, including teardown.
+
+This closes PHASE 01 criteria 3 and 5, PHASE 02 migration/seed/integration
+verification, and PHASE 03's CI integration criterion. The only intentionally
+unclaimed proof is the complete customer client/server flow within one emulator
+session; it is recorded in `PROJECT_STATE.md` and is not a phase exit criterion.
 
 The seed is verified by running it twice and comparing the second run against a
 snapshot of the first (`packages/database/scripts/assert-seeded-users.mjs`). A

@@ -542,7 +542,9 @@ stored four increments. `PrismaUserRepository` now uses a database-side atomic
 increment while holding the row lock through the threshold decision. The full
 local infrastructure suite passes after the fix (51 integration tests, 0
 skipped), including the concurrency assertion. Local Redis is Memurai 8.2.10, not
-Redis 7.4.11; the full suite against the pinned CI services remains to be rerun.
+Redis 7.4.11. GitHub run #3 then passed all 51 integration tests, 0 skipped,
+against PostgreSQL 16.15 and Redis 7.4.11, including the concurrent lockout
+assertion and Redis rate limiter.
 
 Verified manually against a real SMTP conversation (a local sink outside the
 repository, not a committed fixture):
@@ -558,10 +560,11 @@ repository, not a committed fixture):
   reset -> login with the new password -> the same code refused a second time;
 - no plaintext code present in any log line.
 
-Still unverified: the full suite passing inside the CI `integration` job after
-the concurrency fix. Run #2 did boot both compose stacks and their healthchecks,
-but the application verification stopped at the failed integration test before
-the API health probes.
+The full suite passed inside the CI `integration` job on run #3. Both compose
+stacks and healthchecks passed, and the development stack's application
+verification reached and passed both API health probes. The customer app's
+complete client/server flow in one emulator session remains not proven and is not
+claimed.
 
 Not yet applicable, because the feature does not exist yet: IDOR on orders,
 delivery code brute force, WebSocket room authorization, webhook signatures and

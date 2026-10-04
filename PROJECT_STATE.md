@@ -3,7 +3,7 @@
 LAST_UPDATED: 2026-10-04
 
 CURRENT_PHASE: PHASE 04
-CURRENT_MODULE: Repair the PostgreSQL lost update in concurrent failed-login counting found by CI run #2; atomic increment implemented, rerun the full pinned-service suite
+CURRENT_MODULE: PHASE 04 - build AdminModule endpoints that exercise the proven RBAC guards, then seed SUPER_ADMIN, SUPPORT and FINANCE identities
 
 ---
 
@@ -21,6 +21,11 @@ CURRENT_MODULE: Repair the PostgreSQL lost update in concurrent failed-login cou
 
 ### PHASE 01 - Monorepo (foundation slice)
 
+**COMPLETE:** CI run #3 (`21aec62`, 2026-10-04) passed all seven exit criteria:
+clean install, lint/typecheck/tests/build, both compose stacks healthy, API live
+and readiness probes, configuration coverage, workspace implementations and no
+committed secrets. The four-job workflow is green.
+
 Verified locally on 2026-10-01 with `pnpm verify` (lint, typecheck, backend and
 admin builds, 76 TypeScript tests, formatting) and `pnpm run flutter:check`
 (analyzer clean and 24 Dart tests in four Dart workspaces).
@@ -36,7 +41,7 @@ Toolchain:
 - `scripts/flutter-check.mjs` runs the Dart gate; `pnpm run verify:all` chains
   both gates (ADR-018)
 - Git repository initialised with `.gitattributes` (LF normalisation, CRLF only
-  for `*.bat`/`*.cmd`) and one bootstrap commit; nothing has been pushed
+  for `*.bat`/`*.cmd`); public GitHub remote configured and CI run #3 is green
 
 Shared packages:
 
@@ -147,10 +152,9 @@ Infrastructure and automation:
 **Applied to a real PostgreSQL 16 database on 2026-10-02**: `prisma migrate
 deploy` applies `0001_init` cleanly to `deliveryuy` and `deliveryuy_test`, and
 `migrate status` reports the schema up to date. The seed runs twice with the
-snapshot comparison green. Run #2 also applied migrations and verified seed
-idempotency against CI's pinned PostgreSQL 16.15 / Redis 7.4.11. Its integration
-suite then found the concurrent counter defect recorded above, so complete CI
-verification remains pending.
+snapshot comparison green. CI run #3 also applied migrations and verified seed
+idempotency against pinned PostgreSQL 16.15 / Redis 7.4.11, then passed all 51
+integration tests (0 skipped). PHASE 02 is complete.
 
 - `packages/database/prisma/schema.prisma`: 42 models, 26 enums, applied from
   `docs/SCHEMA_PROPOSAL.md`. Every table and column is mapped explicitly to
@@ -181,8 +185,8 @@ verification remains pending.
   the eight `SEED_*` credentials instead of carrying a default password
 - CI `integration` job runs `prisma migrate deploy`, `prisma migrate status`,
   the seed twice (idempotency, compared through snapshots) and the integration
-  suite against pinned PostgreSQL/Redis. Run #2 passed migration and seed, but
-  failed one concurrent-login lost-update assertion before the readiness probe.
+  suite against pinned PostgreSQL/Redis. Run #3 passed migration, seed, all
+  integration tests and API readiness probes.
 
 Locally verified: `prisma validate`, `prisma generate`, `migration:build`
 reproducibility, seed build plus its production and missing-URL guards,
@@ -190,12 +194,12 @@ typecheck, lint and the vitest suite.
 
 ### PHASE 03 - Authentication
 
-Implemented on 2026-10-02 and verified locally: the five Prisma adapters and the
-Redis limiter ran in the integration suite with 0 skipped, the API was exercised
-over HTTP, and both delivered messages were verified by hand against a real SMTP
-conversation. CI run #2 exercised PostgreSQL 16.15 and Redis 7.4.11 and found the
-concurrent-login lost update documented below. That is now fixed locally; the full
-pinned-service suite awaits CI rerun.
+**COMPLETE:** implemented and verified locally, then CI run #3 passed all 51
+integration tests against PostgreSQL 16.15 and Redis 7.4.11 (0 skipped), plus
+both API health probes. The five Prisma adapters and Redis limiter ran against
+the pinned services; the API was exercised over HTTP; both delivered messages
+were verified by hand against a real SMTP conversation. The lost update found in
+run #2 is fixed by the atomic counter update.
 
 `packages/auth` (ADR-020):
 
@@ -383,26 +387,6 @@ Run against a local sink outside the repository (not a committed fixture), with
   the phase: an endpoint that uses the mechanism (`AdminModule` does not exist),
   `SUPER_ADMIN`/`SUPPORT`/`FINANCE` in the seed, and permission names for the
   three non-privileged roles
-- PHASE 03 - Authentication: implementation, documentation, `pnpm verify` exit 0
-  (612 unit/API tests across 23 files), the Dart gate exit 0, the integration suite
-  locally against PostgreSQL and Redis-compatible Memurai (51 executed, 0 skipped,
-  7 files) and a real SMTP conversation for both delivered messages pass. CI run #2
-  executed against PostgreSQL 16.15 and Redis 7.4.11 but exposed one real
-  concurrent-login counter lost update; `PrismaUserRepository` now uses an atomic
-  database increment. The focused integration spec passes locally after the fix;
-  the full pinned-service suite awaits CI rerun. The frontend integration
-  criterion is met: every endpoint in the phase now has a screen in
-  `apps/customer`, including the password recovery flow added in this slice. The
-  remaining item is a clean CI pass, not an absent remote.
-- PHASE 02 - Database: `0001_init` applied, the seed proven idempotent and the
-  database integration specs green locally, all through
-  `scripts/verify-infrastructure.mjs`. CI run #2 also verified migrations and the
-  seed against pinned PostgreSQL/Redis, then failed on the concurrent counter test;
-  the full suite awaits rerun.
-- PHASE 01 - Monorepo: criterion 3 is proven on CI run #2: both the test and
-  development compose stacks passed `up -d --wait`. Criterion 5 remains open:
-  CI's 51-test infrastructure suite found the login lockout lost-update defect,
-  so the API health probes were not reached in that run.
 - Mobile: `login`, `register`, `logout`, `verify-email` and secure session
   persistence exist end to end and are proven on the emulator (ADR-021).
   `apps/merchant` and `apps/driver` still hold their sessions in memory only, and
@@ -418,9 +402,10 @@ Run against a local sink outside the repository (not a committed fixture), with
 
 ## BLOCKED
 
-- **Nothing is blocked for the current scope.** PostgreSQL and Redis now run
-  locally, so the infrastructure-dependent criteria were verified here instead of
-  waiting for CI. What changed, and what is still not proven:
+- **No blocker remains for PHASE 01–03.** CI run #3 passed all four jobs, including
+  both compose stacks, the pinned PostgreSQL/Redis integration suite and API health
+  probes. This Windows host still has no container runtime, so the compose proof is
+  from GitHub Actions, not a local boot. PHASE 04 work continues under `IN_PROGRESS`.
 
 ### The container runtime, and the job that no longer needs it
 
@@ -429,17 +414,18 @@ session is not an administrator, so no container runtime can be installed here -
 WSL needs elevation and a reboot. That is unchanged and is why the compose files
 have never booted on this machine.
 
-What changed is that the gap is now closable by CI alone. The workflow
+The gap is now closed by CI. Before the new job existed, the workflow
 previously had **no job that started the compose files**: it ran
 `docker compose config --quiet`, which parses a document without starting a
 container, and took the `integration` job's two servers from a `services:` block
 declared in the workflow rather than from these files. So PHASE 01 criterion 3
 would have been reported as "pending CI" after a CI run that did not touch it.
 
-A `compose` job now runs both files with `up -d --wait`, which fails unless every
+A `compose` job runs both files with `up -d --wait`, which fails unless every
 service reports healthy, and then points the whole verification script at the
 development stack so the ports those containers publish are exercised for real.
-Nine contracts hold it to that. See `docs/TESTING.MD` "What CI proves".
+Run #3 passed that job and its full verification. Nine contracts hold the workflow
+to this behavior. See `docs/TESTING.MD` "What CI proves".
 
 ### The first CI run, and what it found
 
@@ -508,15 +494,33 @@ updated value and makes the lockout decision before releasing the lock. The full
 local infrastructure script passes after the fix (6/6 steps, 51 integration tests
 across 7 files, 0 skipped, `live 200` / `ready 200`), including the focused
 12-test repository spec and concurrent six-attempt assertion. Local Redis remains
-Memurai 8.2.10, not Redis 7. The full pinned-service CI suite and API health probes
-have not yet rerun; criterion 5 remains open until they do. Security behavior is
-documented in `SECURITY.md` and the fix awaits a commit/push.
+Memurai 8.2.10, not Redis 7. Security behavior is documented in `SECURITY.md`.
+
+### The third CI run: all gates green
+
+Commit `21aec62` was pushed on 2026-10-04. Run #3 passed all four jobs:
+
+- `Lint, typecheck, test, build`: lint, typecheck, admin/backend builds, Prisma
+  validation, formatting, and 685 tests across 27 files all passed;
+- `Dart analyze and tests`: 153 tests passed and all four workspaces analyzed
+  without issues;
+- `Compose stacks boot and become healthy`: both test and development stacks
+  passed `up -d --wait`; the development stack then passed all six verification
+  steps, including migration, idempotent seed, 51 integration tests (7 files, 0
+  skipped), and `live 200` / `ready 200`;
+- `Infrastructure smoke test`: the same six-step verification passed against
+  GitHub's service containers.
+
+Both infrastructure runs reported PostgreSQL 16.15 and Redis 7.4.11, matching
+the pinned major versions. This closes PHASE 01 criteria 3 and 5, PHASE 02
+migration/seed verification and PHASE 03's CI integration criterion. PHASE 01,
+02 and 03 are now closed; PHASE 04 remains in progress.
 
 ### Local PostgreSQL and Redis (unblocking detail)
 
-To unblock verification on this host, PostgreSQL 16.14 and Redis 7 were installed
-**outside the repository**, in the temporary scratch directory, as development
-tools only:
+To unblock verification on this host, PostgreSQL 16.14 and a Redis-compatible
+server were installed **outside the repository**, in the temporary scratch
+directory, as development tools only:
 
 - `embedded-postgres` starts a PostgreSQL 16 cluster on `127.0.0.1:5432`. The
   version matches the `postgres:16` image the compose files use; a different major
@@ -525,10 +529,9 @@ tools only:
   host it resolves to Memurai 8.2.0, not Redis 7.** `redis-memory-server` downloads
   a real Redis binary on macOS and Linux but falls back to Memurai on Windows, and
   Memurai is a Redis-API-compatible server rather than Redis. The Lua rate
-  limiter was therefore proven against a compatible implementation at a different
-  major version. `docs/TESTING.MD` already requires local versions to match the
-  compose ones, so this is a genuine gap in the local evidence; the CI
-  `integration` job is what closes it.
+  limiter is locally exercised against a compatible implementation at a different
+  major version. The exact Redis 7.4.11 proof is now supplied by CI run #3; the
+  local mismatch remains an environment limitation, not a project blocker.
 
 Nothing was added to the repository for this, and the compose files remain the
 documented infrastructure. The only lesson worth keeping is operational: on
@@ -631,65 +634,40 @@ a wrong password returning `401` with the error envelope.
   endpoints - including the lowering direction, which is the one that catches the
   regression. Verified by restoring the decorators: 4 of the 6 fail.
 
-### Still unproven
+### Not claimed / local environment limitations
 
-- **The full API verification on the compose services.** Run #2 proved both
-  compose stacks boot and become healthy, closing PHASE 01 criterion 3. The
-  application verification then stopped on the concurrent counter test, before
-  its API health-probe step. Criterion 5 remains open until that suite and both
-  probes pass. Static contracts in `test/infrastructure/compose.spec.ts` also
-  hold the compose definitions: images/healthchecks, port separation, test-stack
-  isolation, bootstrap mount source and documented interpolation variables.
-- **`HEALTH_CHECK_TIMEOUT_MS`.** The default of 2000 ms is not enough on this
-  host: a cold Prisma connect measures about 2.16 s, so the probe spent its whole
-  budget and answered `degraded` against a healthy database. The local `.env`
-  raises it to 5000 ms. The default was **not** changed, because raising it
-  globally would hide a real regression behind a longer wait, and a budget far
-  above what a real connection costs can exceed an orchestrator's own probe
-  timeout and fail regardless. The variable now documents that the budget covers
-  the cold connect the probe forces, and
-  `scripts/verify-infrastructure.mjs` prints it so a failed health step is
-  diagnosable from the output alone.
-- **The complete integration suite on Redis 7.** Run #2 reported the real pinned
-  versions (PostgreSQL 16.15 and Redis 7.4.11), and 50 of 51 integration tests
-  passed against them, including the Redis rate limiter. One database
-  concurrency assertion failed and is now fixed; rerun is required before the
-  complete suite can be claimed. On this host the local Redis-compatible server
-  is Memurai 8.2, not Redis 7. `scripts/verify-infrastructure.mjs` reports this
-  difference rather than letting a compatible server be mistaken for the pinned
-  version. Its local output reads:
-
-  ```
-  PostgreSQL: 16.14 at localhost:5432 (compose pins postgres:16-alpine)
-  Redis:      8.2.10 at redis://localhost:6379 (compose pins redis:7-alpine)
-  ```
-
-  The script asks each live server for its version (`SHOW server_version` and
-  `INFO server`) and prints it next to the image pin, so a run against Memurai
-  8.2 cannot be mistaken for a run against Redis 7. The pins are read from
-  `docker-compose.test.yml` rather than repeated in the
-  script, so the comparison cannot go on asserting a match after the pin moves;
-  `test/infrastructure/verify-script.spec.ts` holds that.
+- **Full customer client/server flow in one emulator session.** The APIs are
+  covered over HTTP and every phase endpoint has a customer screen, but the
+  complete mobile round trip in one emulator session has not been demonstrated.
+  It remains explicitly not claimed and is not a PHASE 03 exit criterion.
+- **Local Compose execution.** This Windows account cannot install Docker/WSL.
+  The compose proof is from GitHub Actions run #3, which started both stacks and
+  passed all checks; local reproduction is unavailable on this machine.
+- **Local Redis version.** `redis-memory-server` resolves to Memurai 8.2.10 on
+  this host, not Redis 7.4.11. CI run #3 exercised the full suite against the
+  pinned Redis 7.4.11, so this is only a local parity limitation.
+- **Cold local health probe budget.** A local first PostgreSQL connection took
+  about 2.16 s against the 2 s default, so this host's `.env` uses 5 s. The
+  default was not raised globally. CI run #3 passed readiness against both
+  PostgreSQL 16.15 and Redis 7.4.11 (40–45 ms on the runner); the script reports
+  the configured timeout so a local budget issue is distinguishable from a
+  dependency failure.
 
 ---
 
 ## NEXT
 
-1. PHASE 01 / PHASE 02 / PHASE 03 - commit and push the atomic login-failure
-   counter fix, then rerun CI. Run #2 proved clean-checkout builds, both compose
-   stacks and Redis 7, but found a real lost update in one integration test. The
-   focused test passes locally; only a full pinned-service pass closes criterion 5.
-2. PHASE 04 - build the first surface that uses the mechanism now that the guards
+1. PHASE 04 - build the first surface that uses the mechanism now that the guards
    are proven: `AdminModule` with endpoints behind the `admin:*` permissions that
    today hang from nothing, plus `SUPER_ADMIN`, `SUPPORT` and `FINANCE` in the
    seed so the matrix can be exercised against a real deployment and not only in
    unit tests
-3. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the
+2. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the
    existing `TokenStore` port. Deliberately deferred: both apps are placeholders,
    so the file would be written against nothing and would only look finished
-4. Implement provider adapters behind the existing interfaces (map, payment,
+3. Implement provider adapters behind the existing interfaces (map, payment,
    storage) instead of extending the "not configured" guards
-5. Promote the admin HTTP client to `packages/` only when a second web client
+4. Promote the admin HTTP client to `packages/` only when a second web client
    needs it (ADR-018)
 
 ---
@@ -711,9 +689,9 @@ a wrong password returning `401` with the error envelope.
   the address is proven. A deployment that sets it without an administrative
   approval path has accounts that can never sign in, and the configuration
   cannot detect the missing screen
-- Docker unavailable in the current environment. PostgreSQL and Redis were run
-  locally outside the repository to unblock verification, which proves the code
-  but not the compose files (see BLOCKED)
+- Docker unavailable in the current environment, so local compose execution is not
+  possible. GitHub Actions run #3 booted both stacks and passed all checks; local
+  container parity is an environment limitation, not an open project criterion.
 - `@nestjs/cli` pulls `@swc/core` as an optional peer; it is explicitly denied in
   `pnpm-workspace.yaml` because the project compiles with `tsc -b` (ADR-017)
 - `@node-rs/argon2` needs a prebuilt binary for the target platform. None is

@@ -1,7 +1,7 @@
 # DeliveryUY Database Architecture
 
-Status: PHASE 02 - schema and migration `0001_init` written, not yet applied to
-a live database (see "Applied Schema" below and ADR-019)
+Status: PHASE 02 - migration `0001_init` applied and verified against PostgreSQL
+16.14 locally and PostgreSQL 16.15 in CI; not deployed to a production database.
 
 Detailed model:
 
@@ -582,10 +582,12 @@ Retention of financial, audit and personal data is
 
 # Applied Schema
 
-Migration `0001_init` was created in PHASE 02. It is **written and statically
-verified, but not yet applied to a running database**: the development machine
-has no usable PostgreSQL (PROJECT_STATE.md, BLOCKED). Applying it is proven by
-the CI `integration` job (ADR-019).
+Migration `0001_init` was created in PHASE 02. It has been applied to local
+development/test databases (PostgreSQL 16.14) and in CI run #3 against
+PostgreSQL 16.15, both through the service-container and development-compose
+paths. CI also verified `migrate status`, the idempotent seed and the full
+integration suite. No production database is configured or implied by this
+verification (ADR-019).
 
 | File                                                  | Role                                                            |
 | ----------------------------------------------------- | --------------------------------------------------------------- |

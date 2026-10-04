@@ -88,9 +88,10 @@ safe.)
 - CI's `Generate Prisma client` step in the `verify` job is now redundant with
   what the scripts do. It is left in place: it is explicit about the intent, and
   it also precedes the schema validation step.
-- PHASE 01 exit criterion 5 remains **not proven**. These jobs have still never
-  completed; what is now decided is that when they do, the build and lint steps
-  start from a state a fresh checkout is actually in.
+- CI run #3 completed green on a clean GitHub runner, proving the scripts start
+  from fresh-checkout state and closing PHASE 01 criterion 5. The first run's
+  failures were not masked; the final result is recorded in `PROJECT_STATE.md`
+  and `docs/TESTING.MD`.
 
 ## Alternatives considered
 

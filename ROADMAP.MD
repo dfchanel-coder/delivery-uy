@@ -57,9 +57,9 @@ Exit criteria (all met):
 
 ## PHASE 01 - Monorepo
 
-Status: IN_PROGRESS - the compose boot criterion passed on CI run #2; the full
-infrastructure verification remains open after that run exposed a concurrent
-login-lockout lost update (fixed locally, awaiting CI rerun)
+Status: COMPLETE - all seven exit criteria passed in GitHub Actions run #3
+(`21aec62`, 2026-10-04), including both compose stacks, the pinned PostgreSQL /
+Redis integration suite and both API health probes.
 
 Verified on 2026-10-02: `pnpm install`, `pnpm lint`, `pnpm typecheck`,
 `pnpm build`, `pnpm build:admin`, `pnpm test` (596 tests across 22 files) and
@@ -69,7 +69,7 @@ analyzer clean in `packages/dart/core`, `apps/customer`, `apps/merchant`,
 infrastructure, and the admin panel (`next build`, `next start`) renders real API
 state including the degraded readiness path.
 
-Remaining proofs:
+CI evidence:
 
 ### Criterion 3, and the job that was missing to decide it
 
@@ -99,26 +99,18 @@ prerequisites. The next run proved both fixes on a clean Linux runner.
 3. `docker compose -f infrastructure/docker/docker-compose.dev.yml up -d`
    provides PostgreSQL and Redis with healthchecks.
 
-**Criterion 3 is now proven.** CI run #2 successfully ran both compose files:
-the test stack and development stack each passed `up -d --wait`. The development
-stack reported PostgreSQL 16.15 and Redis 7.4.11, matching the pinned major
-versions. This is the first time the repository has booted its documented stacks.
+CI run #2 proved criterion 3: the test and development stacks each passed
+`up -d --wait`, reporting PostgreSQL 16.15 and Redis 7.4.11, but discovered a
+concurrent lost update in the login lockout counter (six requests stored four
+increments). `PrismaUserRepository` was fixed to increment atomically under the
+row lock. CI run #3 then passed all four jobs: `pnpm verify` (685 tests / 27 files),
+Flutter (153 tests), both compose starts with healthchecks, and both full
+infrastructure verifications (6/6 steps, 51 tests / 7 files, 0 skipped, `live
+200`, `ready 200`). The reported server versions were PostgreSQL 16.15 and Redis
+7.4.11. This proves criteria 3 and 5 on the pinned services and closes PHASE 01.
 
-The same run passed build, lint, typecheck, formatting, admin build and all 685
-unit/API tests, but the end-to-end infrastructure script stopped at integration
-test 5/6. Against both the development compose services and GitHub's own service
-containers, one of 51 PostgreSQL integration tests failed:
-`counts concurrent failures without losing increments` expected six simultaneous
-failed-login increments and got four. The test was right: the repository read the
-counter and wrote `current + 1`, so concurrent transactions at `READ COMMITTED`
-lost updates. `PrismaUserRepository` now increments the column atomically in
-PostgreSQL and holds the row lock through the lockout-threshold decision. The
-focused integration spec passes locally after the fix; the full pinned-service CI
-run remains outstanding, and PHASE 01 criterion 5 is not claimed complete until
-the integration suite and API health probes pass there.
-
-What is verified statically without a local container runtime, by
-`test/infrastructure/compose.spec.ts`: both files parse as compose documents;
+Static compose contracts in `test/infrastructure/compose.spec.ts` also guard
+against drift: both files parse as compose documents;
 every service pins an image and a healthcheck with retries; no container name or
 host port is shared between the two stacks; the test stack uses `tmpfs` so a run
 cannot inherit state; the bootstrap bind-mount source exists on disk (a missing
@@ -185,7 +177,8 @@ Exit criteria:
 
 ## PHASE 02 - Database
 
-Status: IN_PROGRESS
+Status: COMPLETE - migrations, seed idempotency and all 51 integration tests
+passed in CI run #3 against PostgreSQL 16.15 and Redis 7.4.11.
 
 Implemented on 2026-10-01:
 
@@ -217,10 +210,10 @@ CI `integration` job runs:
   partial functional index, the conditional `updateMany` losing a race, and
   transaction rollback after a thrown error
 
-The PostgreSQL used locally is a native Windows build of the same major version
-the compose file pins (`postgres:16-alpine`), not the image itself. Applying the
-migration *inside the container* is what the CI `integration` job does and is the
-one remaining unverified step for this phase.
+CI run #3 applied the migration and verified seed idempotency against the pinned
+service containers, then passed the complete 51-test integration suite (0
+skipped). The separate `compose` job also ran the development stack's migration
+and seed through its published ports.
 
 Core entities:
 
@@ -260,13 +253,10 @@ Add:
 
 ## PHASE 03 - Authentication
 
-Status: IN_PROGRESS - one exit criterion outstanding: a green CI integration
-run. Run #2 reached the pinned PostgreSQL/Redis suite but found the concurrent
-login-lockout lost update (fixed locally; full suite awaits rerun). Every other
-criterion in AGENTS.md section 65 is met, including the frontend one that the
-password recovery slice closed: every endpoint in the phase has a screen in
-`apps/customer`. Everything else in the phase is implemented, documented and
-verified locally or by hand against real infrastructure.
+Status: COMPLETE - CI run #3 passed the full pinned-service integration suite and
+the API health probes. The frontend criterion is met: every endpoint in the phase
+has a screen in `apps/customer`; the complete customer client/server flow in one
+emulator session remains not proven and is not claimed.
 
 Implement:
 
@@ -390,25 +380,19 @@ skipped against real PostgreSQL and Redis. Both message flows were additionally
 verified by hand against a real SMTP conversation; see `SECURITY.md` for what was
 observed.
 
+CI run #3 additionally passed `pnpm verify` (685 tests / 27 files), all 51
+integration tests against PostgreSQL 16.15 and Redis 7.4.11 (0 skipped), and both
+API probes (`live 200`, `ready 200`). The concurrent failed-login counter race
+found in run #2 was fixed with an atomic database increment before this run.
+
 The infrastructure-dependent parts of this phase are now verified through
 `scripts/verify-infrastructure.mjs`, the same script the CI `integration` job
 runs: migrations apply, the seed is idempotent, all seven integration spec files
 execute rather than skip, and the booted API answers both health probes.
 
-Remaining before this phase can close:
-
-1. A green CI integration run after fixing the concurrent counter update. Run #2
-   did execute all 51 specs against PostgreSQL 16.15 and Redis 7.4.11; 50 passed,
-   including the Redis rate limiter. `PrismaUserRepository` now performs the
-   failed-login increment atomically, and the full local infrastructure suite
-   passes after the fix (51 tests, 0 skipped, both health probes green). CI must
-   prove the full suite and API health probes against the pinned services.
-
-The local Redis caveat remains: Windows `redis-memory-server` provides Memurai,
-not `redis:7-alpine`. CI run #2 removes the version uncertainty: the verification
-script reported the actual PostgreSQL 16.15 and Redis 7.4.11 images, so the Redis
-rate limiter was exercised against the pinned major. The suite as a whole is not
-yet green because of the independent PostgreSQL counter race.
+Windows `redis-memory-server` provides Memurai locally, not `redis:7-alpine`. CI
+run #3 removes that evidence gap: all 51 specs, including the Redis rate limiter,
+passed against the pinned Redis 7.4.11, and the full suite is green.
 
 ---
 
@@ -485,10 +469,11 @@ sign-out would have had `null` returned as if it were one, and the failure would
 have surfaced later as a `TypeError` on `principal.roles` instead of at the one
 place whose message names `JwtAuthGuard`.
 
-Verified locally on 2026-10-03: `pnpm verify` exit 0 with 670 tests across 26
-files, `pnpm run build` exit 0, and `scripts/verify-infrastructure.mjs` exit 0
-with 6/6 steps, 51 integration tests across 7 files with 0 skipped against real
-PostgreSQL and Redis, and `live 200, ready 200, database=up, redis=up`.
+CI run #3 (2026-10-04) passed `pnpm verify` (685 tests / 27 files), the Dart gate
+(153 tests), and both infrastructure jobs (51 tests / 7 files, 0 skipped,
+`live 200`, `ready 200`) against PostgreSQL 16.15 and Redis 7.4.11. Locally,
+`pnpm verify` and all six infrastructure steps also pass; the local Redis server
+is Memurai 8.2.10, so the pinned-version claim comes from CI.
 
 Remaining before this phase can close:
 
