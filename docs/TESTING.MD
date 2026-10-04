@@ -378,6 +378,46 @@ start carries `--wait`. Two of them were proven load-bearing by mutating the
 workflow: dropping `--wait`, and changing the compose file's published port,
 each failed exactly the contract meant to catch it.
 
+### The first run, and the two prerequisites it found
+
+Run #1 (2026-10-03) is the first log this workflow has ever produced. `flutter`
+passed. `verify`, `compose` and `integration` all failed, on `Lint` and on
+`Build backend`.
+
+Both failures were prerequisites satisfied by convention rather than declared,
+and neither was reachable from this machine, where `dist/` and the generated
+Prisma client were already present:
+
+- **`Build backend`, in all three jobs that ran it.** The root `build` was
+  `tsc -b tsconfig.json`. That compiles each project reference by invoking the
+  compiler on that reference's tsconfig - it does not run the referenced
+  package's `build` script, and `packages/database` generates the Prisma client
+  in its own `build`. So nothing generated it, and `@prisma/client` exported
+  none of the enums `packages/database/src/enums.ts` imports.
+- **`Lint`, in the one job that did generate the client first.** ESLint runs with
+  `projectService: true`, so the typed rules resolve types through the compiled
+  project references. With no `dist/*.d.ts`, `HealthReadiness` imported by the
+  admin panel had no resolvable type and `no-unsafe-member-access` fired on every
+  property read from it - ten errors in one file, none mentioning the build.
+
+ADR-024 makes each script declare what it needs: `build` and `typecheck` generate
+the Prisma client, and `lint` builds first. Reproduced and fixed on this host by
+deleting every `dist/` and `node_modules/.prisma` and running each script alone:
+`pnpm run lint` failed with run #1's exact ten errors before the change and passes
+after it. `test/infrastructure/toolchain-scripts.spec.ts` holds it as rules over
+the script map, so a script added later inherits the requirement.
+
+Neither criterion is closed by this. The `compose` job never reached its first
+step, so it still has never started a container.
+
+After the fix, on 2026-10-03: `pnpm verify` passes (685 tests across 27 files),
+`pnpm run flutter:check` passes (153 Dart tests, analyzer clean in all four Dart
+workspaces), and `scripts/verify-infrastructure.mjs` passes all six steps,
+including 51 integration tests with 0 skipped and `live 200` / `ready 200`. The
+local database is PostgreSQL 16.14, but the local Redis-compatible server is
+Memurai 8.2.10, not the pinned `redis:7-alpine`. This is local evidence only: the
+CI build is still pending, and the exact Redis 7 proof remains **not proven**.
+
 The seed is verified by running it twice and comparing the second run against a
 snapshot of the first (`packages/database/scripts/assert-seeded-users.mjs`). A
 seed that rewrites rows it already created would be a defect, and re-running it is

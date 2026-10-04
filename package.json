@@ -9,10 +9,10 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "build": "tsc -b tsconfig.json",
+    "build": "pnpm run db:generate && tsc -b tsconfig.json",
     "clean": "tsc -b tsconfig.json --clean",
-    "typecheck": "tsc -b tsconfig.json --force && tsc -p test/tsconfig.json",
-    "lint": "eslint . --max-warnings 0",
+    "typecheck": "pnpm run db:generate && tsc -b tsconfig.json --force && tsc -p test/tsconfig.json",
+    "lint": "pnpm run build && eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

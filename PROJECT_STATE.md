@@ -3,7 +3,7 @@
 LAST_UPDATED: 2026-10-03
 
 CURRENT_PHASE: PHASE 04
-CURRENT_MODULE: Users and Roles - direct tests for the three global guards (JwtAuthGuard, RolesGuard, PermissionsGuard) and the endpoint security decorators, which until now no test had ever reached
+CURRENT_MODULE: CI clean-checkout failures from run #1 - declare Prisma generation and compiled-type prerequisites in pnpm scripts (ADR-024), then rerun GitHub Actions
 
 ---
 
@@ -14,8 +14,10 @@ CURRENT_MODULE: Users and Roles - direct tests for the three global guards (JwtA
 - Product, stack, roles and order state machine defined
 - ARCHITECTURE.md, DATABASE.md, SECURITY.md, LEGAL.md finalized
 - docs/ERD.md, docs/SCHEMA_PROPOSAL.md, docs/MODULE_BOUNDARIES.md
-- ADR-001 ... ADR-023 accepted (ADR-004 and ADR-015 carry
-  `LEGAL_REVIEW_REQUIRED`; ADR-023 supersedes the isolation bullet of ADR-016)
+- ADR-001 ... ADR-024 accepted (ADR-004 and ADR-015 carry
+  `LEGAL_REVIEW_REQUIRED`; ADR-023 supersedes the isolation bullet of ADR-016;
+  ADR-024 makes the pnpm scripts declare their own prerequisites instead of
+  relying on step order in CI)
 
 ### PHASE 01 - Monorepo (foundation slice)
 
@@ -420,8 +422,8 @@ session is not an administrator, so no container runtime can be installed here -
 WSL needs elevation and a reboot. That is unchanged and is why the compose files
 have never booted on this machine.
 
-What changed is that the gap is now closable by CI alone, and closes for real.
-The workflow previously had **no job that started the compose files**: it ran
+What changed is that the gap is now closable by CI alone. The workflow
+previously had **no job that started the compose files**: it ran
 `docker compose config --quiet`, which parses a document without starting a
 container, and took the `integration` job's two servers from a `services:` block
 declared in the workflow rather than from these files. So PHASE 01 criterion 3
@@ -430,10 +432,50 @@ would have been reported as "pending CI" after a CI run that did not touch it.
 A `compose` job now runs both files with `up -d --wait`, which fails unless every
 service reports healthy, and then points the whole verification script at the
 development stack so the ports those containers publish are exercised for real.
-Nine contracts hold it to that, and PHASE 01 criterion 3 becomes provable by
-pushing a branch. See `docs/TESTING.MD` "What CI proves".
+Nine contracts hold it to that. See `docs/TESTING.MD` "What CI proves".
 
-Still true: nothing here proves it yet. The job has never run.
+### The first CI run, and what it found
+
+The remote was created and `main` pushed on 2026-10-03, so run #1 has a log.
+**Three of the four jobs failed and one passed:** `flutter` (analyzer clean, 153
+Dart tests) succeeded; `verify`, `compose` and `integration` did not.
+
+Both failures were prerequisites satisfied by convention rather than declared,
+and both were invisible locally for the same reason - this machine already had
+`dist/` and `node_modules/.prisma` from previous runs, so a local `pnpm verify`
+passed on leftover state and reported that state as a property of the repository.
+
+1. `Build backend` failed in all three jobs that ran it. The root `build` was
+   `tsc -b tsconfig.json`, which compiles each project reference by invoking the
+   compiler on that reference's tsconfig and never runs the referenced package's
+   `build` script. `packages/database` generates the Prisma client in its own
+   `build`, so the root build never generated it, and `@prisma/client` exported
+   none of the enums `packages/database/src/enums.ts` imports.
+2. `Lint` failed in the one job that did generate the client first. ESLint runs
+   with `projectService: true`, so the typed rules resolve types through the
+   compiled project references. With no `dist/*.d.ts`, `HealthReadiness` had no
+   resolvable type and `no-unsafe-member-access` fired on each property read from
+   it: ten errors in `apps/admin/src/app/health/page.tsx`, none of which mention
+   the missing build.
+
+Both are fixed by ADR-024: root `build` and `typecheck` generate the Prisma
+client, and `lint` builds first, so each script declares what it needs instead of
+inheriting it from step order. Proven on this host by deleting every `dist/` and
+`node_modules/.prisma` and running each script alone - `pnpm run lint` failed
+with the run's exact ten errors before the change and passes after it. Seven
+contracts in `test/infrastructure/toolchain-scripts.spec.ts` hold it.
+
+**Nothing is closed by this.** Run #1 still decides no criterion: the `compose`
+job never reached its first step, and the `compose` job has still never started a
+container. PHASE 01 criteria 3 and 5 are decided by the next run, not by this
+one.
+
+After the fix, on 2026-10-03: `pnpm verify` passes (685 tests across 27 files);
+`pnpm run flutter:check` passes (153 Dart tests, analyzer clean); and
+`scripts/verify-infrastructure.mjs` passes all six steps, with 51 integration
+tests, 0 skipped, `live 200` and `ready 200`. The PostgreSQL server is 16.14;
+the local Redis-compatible server is Memurai 8.2.10, not the pinned Redis 7, so
+the exact-version and compose proofs remain open until a successful CI run.
 
 ### Local PostgreSQL and Redis (unblocking detail)
 
@@ -532,6 +574,11 @@ a wrong password returning `401` with the error envelope.
   variable or a schema violation are all visible in the API's own log, so the
   message was the least useful one available. The output is now included on that
   failure.
+- **No CI job ever ran, and the three that mattered had never been executed.**
+  On the first run (2026-10-03) `Build backend` failed in all three jobs that ran
+  it and `Lint` failed in the fourth, for the two reasons recorded above. Both
+  had been latent in the repository since PHASE 01 and were masked by this
+  machine's build outputs. ADR-024 fixes them; seven contracts hold the fix.
 - **`PASSWORD_MIN_LENGTH` had a second, frozen copy in the request DTOs, and the
   copy won.** `RegisterDto` and `PasswordRecoveryCompleteDto` both declared
   `@MinLength(10)`. The validation pipe runs before the service, so the constant
@@ -548,13 +595,14 @@ a wrong password returning `401` with the error envelope.
 
 ### Still unproven
 
-- **Docker Compose itself.** The `integration` job remains the only place
-  `docker compose` bringing up both services with healthchecks is exercised, so
-  PHASE 01 exit criterion 3 stays unverified locally. Reaching equivalent
-  endpoints by other means proves the code, not the compose file. What is now
-  verified statically, by `test/infrastructure/compose.spec.ts`: both files parse,
-  every service pins an image and a real healthcheck, no container name or host
-  port is shared between the stacks, the test stack cannot inherit state, the
+- **Docker Compose itself.** The `compose` job is the only place
+  `docker compose` bringing up both files with healthchecks is exercised, and it
+  has still never reached that step: run #1 failed before it. So PHASE 01 exit
+  criterion 3 stays unverified, now for a different reason than before - not
+  because nothing tried, but because the job it now lives in never started. What
+  is verified statically, by `test/infrastructure/compose.spec.ts`: both files
+  parse, every service pins an image and a real healthcheck, no container name or
+  host port is shared between the stacks, the test stack cannot inherit state, the
   bootstrap bind-mount source exists, every interpolated variable is documented
   and every documented variable is used, and the published PostgreSQL and Redis
   are the ones `.env.example` tells the API to connect to.
@@ -590,11 +638,11 @@ a wrong password returning `401` with the error envelope.
 
 ## NEXT
 
-1. PHASE 03 / PHASE 01 / PHASE 02 - create the GitHub remote and push, so the
-   `compose` and `integration` jobs run for the first time. They have never run:
-   no remote is configured and `gh` is not installed, so this needs the
-   repository owner. When they do, `compose` closes PHASE 01 criterion 3 and
-   `integration` the compose-based proof for PHASE 01 and PHASE 02
+1. PHASE 01 / PHASE 02 / PHASE 03 - rerun CI after ADR-024. Run #1 failed in
+   three of four jobs on two latent defects; the fixes are proven on this host
+   from a wiped `dist/` and no Prisma client, but only CI can establish the clean
+   Linux result, start the compose stacks and supply the Redis 7 evidence the
+   local Memurai server cannot
 2. PHASE 04 - build the first surface that uses the mechanism now that the guards
    are proven: `AdminModule` with endpoints behind the `admin:*` permissions that
    today hang from nothing, plus `SUPER_ADMIN`, `SUPPORT` and `FINANCE` in the

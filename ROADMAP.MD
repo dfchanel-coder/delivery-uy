@@ -57,7 +57,9 @@ Exit criteria (all met):
 
 ## PHASE 01 - Monorepo
 
-Status: IN_PROGRESS - one exit criterion open, for a reason outside the code
+Status: IN_PROGRESS - two exit criteria open, and the CI that is meant to close
+them ran for the first time on 2026-10-03 and found two prerequisites that were
+satisfied by convention rather than declared (ADR-024)
 
 Verified on 2026-10-02: `pnpm install`, `pnpm lint`, `pnpm typecheck`,
 `pnpm build`, `pnpm build:admin`, `pnpm test` (596 tests across 22 files) and
@@ -67,7 +69,7 @@ analyzer clean in `packages/dart/core`, `apps/customer`, `apps/merchant`,
 infrastructure, and the admin panel (`next build`, `next start`) renders real API
 state including the degraded readiness path.
 
-Remaining exit criterion:
+Remaining proofs:
 
 ### Criterion 3, and the job that was missing to decide it
 
@@ -88,28 +90,41 @@ them were proven load-bearing by mutating the workflow: dropping `--wait`, and
 changing the published port in the compose file, each failed exactly the contract
 meant to catch it. See `docs/TESTING.MD` "What CI proves".
 
-Still unproven, because the job has never run: no container runtime is available
-on this host (not an administrator, no WSL, no Docker, no Podman) and the
-repository has no remote. What changed is that pushing a branch is now sufficient
-to decide it.
+Still unproven, and now for a different reason than before. Run #1 (2026-10-03)
+is the workflow's first log ever, and the `compose` job failed on `Build backend`
+before it reached its first step, so no container has been started by this
+repository anywhere. It failed because the root `build` compiled the project
+references with `tsc -b` without generating the Prisma client that
+`packages/database` generates inside its own `build` script - a prerequisite that
+had been satisfied on the development machine by leftover `node_modules` and was
+therefore invisible locally. The same run found `Lint` depending on the same kind
+of thing, since typed linting resolves types through the compiled output. **ADR-024**
+makes each script declare its own prerequisites; both are proven fixed on this host
+from a wiped tree. PHASE 01 criteria 3 and 5 are decided by the next run, not by
+this one.
 
 3. `docker compose -f infrastructure/docker/docker-compose.dev.yml up -d`
    provides PostgreSQL and Redis with healthchecks.
 
-**Criterion 5 is now verified** against real PostgreSQL and Redis by
-`scripts/verify-infrastructure.mjs`, which boots the compiled API and reads both
-probes over HTTP: `live 200`, `ready 200`, `database=up`, `redis=up`.
+`scripts/verify-infrastructure.mjs` has verified the compiled API and both probes
+against local infrastructure: `live 200`, `ready 200`, `database=up`,
+`redis=up`. PostgreSQL matches the image major version, but the local Redis is
+Memurai 8.2.10, not the pinned `redis:7-alpine`; the exact-version integration
+proof still needs CI. This is useful local evidence, not closure of the pinned
+infrastructure criterion.
 
-Criterion 3 is the only thing left, and it needs a container runtime. What is
-verified without one, by `test/infrastructure/compose.spec.ts`: both files parse
-as compose documents; every service pins an image and a healthcheck with retries;
-no container name or host port is shared between the two stacks; the test stack
-uses `tmpfs` so a run cannot inherit state; the bootstrap bind-mount source
-exists on disk (a missing source silently becomes an empty directory and the
-container starts healthfully having skipped its bootstrap); every interpolated
-variable is documented in `.env.docker.example` and every documented variable is
-used; and the PostgreSQL and Redis the dev stack publishes are the ones
-`.env.example` tells the API to connect to.
+Criterion 3 (our compose files boot and become healthy) also remains open. The
+new `compose` CI job is designed to decide it, but run #1 failed in `Build backend`
+before the first `docker compose` command. What is verified without a container
+runtime, by `test/infrastructure/compose.spec.ts`: both files parse as compose
+documents; every service pins an image and a healthcheck with retries; no
+container name or host port is shared between the two stacks; the test stack uses
+`tmpfs` so a run cannot inherit state; the bootstrap bind-mount source exists on
+disk (a missing source silently becomes an empty directory and the container
+starts healthfully having skipped its bootstrap); every interpolated variable is
+documented in `.env.docker.example` and every documented variable is used; and
+the PostgreSQL and Redis the dev stack publishes are the ones `.env.example` tells
+the API to connect to.
 
 That check found one real gap while being written: `TEST_POSTGRES_PORT` and
 `TEST_REDIS_PORT` were interpolated with defaults but documented nowhere, so an
