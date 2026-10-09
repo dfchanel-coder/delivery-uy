@@ -109,6 +109,10 @@ pnpm dev:api                  # http://localhost:3000
 pnpm dev:admin                # http://localhost:4000 (needs the API running)
 ```
 
+The scripts that talk to infrastructure (`dev:*` and `db:*`) load `.env` from
+the repository root automatically (`scripts/with-env.mjs`), without overriding a
+value already exported in the environment, so the `cp` above is enough.
+
 `pnpm db:seed` requires the fourteen `SEED_*` credentials from `.env`: it
 creates one account per role family (`ADMIN`, `SUPER_ADMIN`, `SUPPORT`,
 `FINANCE`, `MERCHANT`, `DRIVER`, `CUSTOMER`) so a login can be exercised, and
