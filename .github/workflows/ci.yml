@@ -126,6 +126,12 @@ jobs:
       SEED_DRIVER_PASSWORD: ci-only-driver-password-0123456789
       SEED_CUSTOMER_EMAIL: customer@ci.deliveryuy.local
       SEED_CUSTOMER_PASSWORD: ci-only-customer-password-0123456789
+      SEED_SUPER_ADMIN_EMAIL: superadmin@ci.deliveryuy.local
+      SEED_SUPER_ADMIN_PASSWORD: ci-only-superadmin-password-0123456789
+      SEED_SUPPORT_EMAIL: support@ci.deliveryuy.local
+      SEED_SUPPORT_PASSWORD: ci-only-support-password-0123456789
+      SEED_FINANCE_EMAIL: finance@ci.deliveryuy.local
+      SEED_FINANCE_PASSWORD: ci-only-finance-password-0123456789
 
     steps:
       - uses: actions/checkout@v4
@@ -254,6 +260,12 @@ jobs:
           SEED_DRIVER_PASSWORD: ci-only-driver-password-0123456789
           SEED_CUSTOMER_EMAIL: customer@ci.deliveryuy.local
           SEED_CUSTOMER_PASSWORD: ci-only-customer-password-0123456789
+          SEED_SUPER_ADMIN_EMAIL: superadmin@ci.deliveryuy.local
+          SEED_SUPER_ADMIN_PASSWORD: ci-only-superadmin-password-0123456789
+          SEED_SUPPORT_EMAIL: support@ci.deliveryuy.local
+          SEED_SUPPORT_PASSWORD: ci-only-support-password-0123456789
+          SEED_FINANCE_EMAIL: finance@ci.deliveryuy.local
+          SEED_FINANCE_PASSWORD: ci-only-finance-password-0123456789
         run: |
           pnpm run build
           node scripts/verify-infrastructure.mjs --from 1

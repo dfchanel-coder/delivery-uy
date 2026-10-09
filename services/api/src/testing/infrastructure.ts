@@ -174,6 +174,26 @@ export async function deleteTestKeys(client: Redis, pattern: string): Promise<vo
   if (keys.length > 0) await client.del(...keys);
 }
 
+/**
+ * Clears the tables the admin, audit and platform integration tests write.
+ *
+ * Kept separate from `truncateAuthTables` because the two suites clean up
+ * disjoint sets: this one must not depend on a future auth table disappearing
+ * an audit fixture, or the other way around. `risk_events` appears in both, and
+ * TRUNCATE is idempotent, so the overlap is safe.
+ */
+export async function truncateAdminTables(client: PrismaClient): Promise<void> {
+  await client.$executeRawUnsafe(
+    'TRUNCATE TABLE "audit_logs", "feature_flags", "risk_events" RESTART IDENTITY CASCADE',
+  );
+}
+
+/** Truncates the admin/audit/platform tables before each test, when reachable. */
+export async function resetAdminTables(): Promise<void> {
+  if (database === null) await openDatabase();
+  if (database?.status === 'ready') await truncateAdminTables(database.value);
+}
+
 // ---------------------------------------------------------------------------
 // Redis
 // ---------------------------------------------------------------------------

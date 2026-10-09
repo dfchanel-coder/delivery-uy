@@ -42,6 +42,12 @@ interface SeedConfig {
   readonly driverPassword: string;
   readonly customerEmail: string;
   readonly customerPassword: string;
+  readonly superAdminEmail: string;
+  readonly superAdminPassword: string;
+  readonly supportEmail: string;
+  readonly supportPassword: string;
+  readonly financeEmail: string;
+  readonly financePassword: string;
 }
 
 function readConfig(): SeedConfig {
@@ -68,6 +74,12 @@ function readConfig(): SeedConfig {
     driverPassword: requireEnv('SEED_DRIVER_PASSWORD'),
     customerEmail: requireEnv('SEED_CUSTOMER_EMAIL'),
     customerPassword: requireEnv('SEED_CUSTOMER_PASSWORD'),
+    superAdminEmail: requireEnv('SEED_SUPER_ADMIN_EMAIL'),
+    superAdminPassword: requireEnv('SEED_SUPER_ADMIN_PASSWORD'),
+    supportEmail: requireEnv('SEED_SUPPORT_EMAIL'),
+    supportPassword: requireEnv('SEED_SUPPORT_PASSWORD'),
+    financeEmail: requireEnv('SEED_FINANCE_EMAIL'),
+    financePassword: requireEnv('SEED_FINANCE_PASSWORD'),
   };
 }
 
@@ -296,14 +308,19 @@ async function seedDevelopmentUsers(prisma: PrismaClient, config: SeedConfig): P
 
   // The DRIVER row needs a city, so it is created after the geography seed. It
   // is intentionally left out of this list and handled separately.
+  // The three admin families have no profile: PHASE 04 proves their roles are
+  // enough, and profiles (staff members, etc.) belong to later phases.
   const accounts: ReadonlyArray<{
     readonly email: string;
     readonly password: string;
-    readonly role: 'ADMIN' | 'MERCHANT' | 'CUSTOMER';
+    readonly role: 'ADMIN' | 'SUPER_ADMIN' | 'SUPPORT' | 'FINANCE' | 'MERCHANT' | 'CUSTOMER';
   }> = [
     { email: config.adminEmail, password: config.adminPassword, role: 'ADMIN' },
     { email: config.merchantEmail, password: config.merchantPassword, role: 'MERCHANT' },
     { email: config.customerEmail, password: config.customerPassword, role: 'CUSTOMER' },
+    { email: config.superAdminEmail, password: config.superAdminPassword, role: 'SUPER_ADMIN' },
+    { email: config.supportEmail, password: config.supportPassword, role: 'SUPPORT' },
+    { email: config.financeEmail, password: config.financePassword, role: 'FINANCE' },
   ];
 
   const city = await prisma.city.findFirst({

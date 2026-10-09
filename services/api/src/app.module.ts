@@ -11,6 +11,9 @@ import { SecurityModule } from './common/security/security.module.js';
 import { JwtAuthGuard } from './common/security/jwt-auth.guard.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { HealthModule } from './modules/health/health.module.js';
+import { AdminModule } from './modules/admin/admin.module.js';
+import { AuditModule } from './modules/audit/audit.module.js';
+import { PlatformModule } from './modules/platform/platform.module.js';
 
 /**
  * Application composition root (ARCHITECTURE.md section 4).
@@ -70,6 +73,9 @@ import { HealthModule } from './modules/health/health.module.js';
     RateLimitModule,
     HealthModule,
     AuthModule,
+    AuditModule,
+    PlatformModule,
+    AdminModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

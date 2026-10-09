@@ -247,6 +247,12 @@ describe('workflow environment matches the configuration schema', () => {
     SEED_DRIVER_PASSWORD: 'packages/database/prisma/seed.ts',
     SEED_CUSTOMER_EMAIL: 'packages/database/prisma/seed.ts',
     SEED_CUSTOMER_PASSWORD: 'packages/database/prisma/seed.ts',
+    SEED_SUPER_ADMIN_EMAIL: 'packages/database/prisma/seed.ts',
+    SEED_SUPER_ADMIN_PASSWORD: 'packages/database/prisma/seed.ts',
+    SEED_SUPPORT_EMAIL: 'packages/database/prisma/seed.ts',
+    SEED_SUPPORT_PASSWORD: 'packages/database/prisma/seed.ts',
+    SEED_FINANCE_EMAIL: 'packages/database/prisma/seed.ts',
+    SEED_FINANCE_PASSWORD: 'packages/database/prisma/seed.ts',
   };
 
   it('sets no variable the API schema does not read', () => {

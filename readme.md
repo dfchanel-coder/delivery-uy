@@ -109,16 +109,20 @@ pnpm dev:api                  # http://localhost:3000
 pnpm dev:admin                # http://localhost:4000 (needs the API running)
 ```
 
-`pnpm db:seed` requires the eight `SEED_*` credentials from `.env`: it creates
-one account per role family (`ADMIN`, `MERCHANT`, `DRIVER`, `CUSTOMER`) so a
-login can be exercised, and it refuses to invent a password. The script
-refuses to run when `APP_ENV` or `NODE_ENV` is `production`.
+`pnpm db:seed` requires the fourteen `SEED_*` credentials from `.env`: it
+creates one account per role family (`ADMIN`, `SUPER_ADMIN`, `SUPPORT`,
+`FINANCE`, `MERCHANT`, `DRIVER`, `CUSTOMER`) so a login can be exercised, and
+it refuses to invent a password. The script refuses to run when `APP_ENV` or
+`NODE_ENV` is `production`.
 
 The accounts it creates are exactly the ones in `.env` - nothing is hardcoded:
 
 | Role | Variables | Notes |
 | --- | --- | --- |
 | `ADMIN` | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` | `admin@deliveryuy.local` in `.env.example` |
+| `SUPER_ADMIN` | `SEED_SUPER_ADMIN_EMAIL`, `SEED_SUPER_ADMIN_PASSWORD` | `superadmin@deliveryuy.local` |
+| `SUPPORT` | `SEED_SUPPORT_EMAIL`, `SEED_SUPPORT_PASSWORD` | `support@deliveryuy.local` |
+| `FINANCE` | `SEED_FINANCE_EMAIL`, `SEED_FINANCE_PASSWORD` | `finance@deliveryuy.local` |
 | `MERCHANT` | `SEED_MERCHANT_EMAIL`, `SEED_MERCHANT_PASSWORD` | `merchant@deliveryuy.local` |
 | `DRIVER` | `SEED_DRIVER_EMAIL`, `SEED_DRIVER_PASSWORD` | `driver@deliveryuy.local` |
 | `CUSTOMER` | `SEED_CUSTOMER_EMAIL`, `SEED_CUSTOMER_PASSWORD` | `customer@deliveryuy.local` |

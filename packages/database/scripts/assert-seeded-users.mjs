@@ -6,7 +6,7 @@
  * writing rows a developer will then log into, so the claims it makes are
  * checked here instead of being taken on trust:
  *
- * - the four role families exist exactly once each;
+ * - the seven role families exist exactly once each;
  * - no password column holds anything but an Argon2id PHC digest, so a fake
  *   hash can never reach a working login;
  * - a second run neither duplicates a row nor rewrites an existing hash, which
@@ -42,6 +42,9 @@ const EXPECTED_ACCOUNTS = [
   { env: 'SEED_MERCHANT_EMAIL', role: 'MERCHANT' },
   { env: 'SEED_DRIVER_EMAIL', role: 'DRIVER' },
   { env: 'SEED_CUSTOMER_EMAIL', role: 'CUSTOMER' },
+  { env: 'SEED_SUPER_ADMIN_EMAIL', role: 'SUPER_ADMIN' },
+  { env: 'SEED_SUPPORT_EMAIL', role: 'SUPPORT' },
+  { env: 'SEED_FINANCE_EMAIL', role: 'FINANCE' },
 ];
 
 const EXPECTED_CATEGORIES = ['almacenes', 'restaurantes', 'farmacias', 'panaderias'];
