@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { API_PREFIX, configureApp } from '../../bootstrap.js';
 import { AppModule } from '../../app.module.js';
 import { APP_CONFIG } from '../../common/config/app-config.module.js';
+import { UNIT_OF_WORK } from '../../common/database/unit-of-work.js';
 import { testAppConfig } from '../../testing/app-config.fixture.js';
 import { ADMIN_READ_MODEL } from './admin.tokens.js';
 import { AUDIT_LOG_REPOSITORY, RISK_EVENT_READER } from '../audit/audit.tokens.js';
@@ -16,6 +17,7 @@ import {
   InMemoryAuditLogRepository,
   InMemoryFeatureFlagRepository,
   InMemoryRiskEventReader,
+  InMemoryUnitOfWork,
   StubAdminReadModel,
 } from '../../testing/admin-doubles.js';
 
@@ -93,6 +95,8 @@ async function startApp(): Promise<Harness> {
     .useValue(riskEvents)
     .overrideProvider(FEATURE_FLAG_REPOSITORY)
     .useValue(flags)
+    .overrideProvider(UNIT_OF_WORK)
+    .useValue(new InMemoryUnitOfWork())
     .overrideProvider(APP_CONFIG)
     .useValue(testAppConfig())
     .compile();

@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { AdminAuditLog, AdminRiskEvent } from '@deliveryuy/types';
+import type { TransactionContext } from '../../common/database/unit-of-work.js';
 import { ApiException } from '../../common/errors/api-exception.js';
 import { decodeCursor, encodeCursor, type Cursor } from '../../common/pagination/cursor.js';
 import { PagedResult } from '../../common/pagination/paged-result.js';
@@ -52,9 +53,18 @@ export class AuditService {
     @Inject(RISK_EVENT_READER) private readonly riskEvents: RiskEventReader,
   ) {}
 
-  /** Records one privileged action. Awaited, so a failed write fails the request. */
-  public async record(actor: AuditActor, entry: AuditEntry): Promise<void> {
-    await this.logs.record(toInput(actor, entry));
+  /**
+   * Records one privileged action. Awaited, so a failed write fails the request.
+   *
+   * Pass `tx` when the action also writes elsewhere: the two then commit or roll
+   * back together instead of leaving a change with no record (AGENTS.md section 83).
+   */
+  public async record(
+    actor: AuditActor,
+    entry: AuditEntry,
+    tx?: TransactionContext,
+  ): Promise<void> {
+    await this.logs.record(toInput(actor, entry), tx);
   }
 
   public async listAuditLogs(query: AuditLogListQuery): Promise<PagedResult<AdminAuditLog>> {

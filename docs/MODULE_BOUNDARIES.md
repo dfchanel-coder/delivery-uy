@@ -30,6 +30,10 @@ Rules:
   provider SDK. It receives plain data and returns plain data;
 - application services are the only layer allowed to open transactions and to
   call providers;
+- a cross-module write that must be atomic goes through the `UnitOfWork` port
+  (`common/database`): the composing service opens the transaction and passes the
+  handle down, and each module's repository joins it instead of committing on its
+  own (AGENTS.md section 83);
 - repositories wrap Prisma and enforce soft-delete filters and tenant scoping.
 
 ---

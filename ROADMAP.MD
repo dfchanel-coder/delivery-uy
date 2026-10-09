@@ -553,7 +553,8 @@ that same pipe. `UserListResponse` / `UserDetailResponse` live in `packages/type
 and the Prisma adapter keeps its coverage in the integration suite
 (`prisma-user-admin.repository.integration.spec.ts`).
 
-With this slice, `pnpm test` is 762 tests across 36 files.
+With this slice and the transactional toggle, `pnpm test` is 763 tests across 36
+files.
 
 Remaining before this phase can close:
 
@@ -563,10 +564,10 @@ Remaining before this phase can close:
 2. permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`, once there are
    endpoints that need them. The lists stay empty until then: an empty list is
    accurate, not incomplete
-3. a transactional unit of work for the flag toggle and its audit write. Today
-   they are two awaited statements, so a crash between them could leave a flag
-   changed with no record of who changed it (tracked in `PROJECT_STATE.md`
-   "CURRENT RISKS")
+3. a transactional unit of work for the flag toggle and its audit write. **Done:**
+   `AdminService` runs both writes inside one `UnitOfWork.runInTransaction`, and
+   `admin-transaction.integration.spec.ts` proves the flag rolls back when the
+   transaction throws (AGENTS.md section 83)
 
 ---
 

@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@deliveryuy/database';
+import type { TransactionContext } from '../../../common/database/unit-of-work.js';
 import type {
   AuditLogQuery,
   AuditLogRecord,
@@ -23,8 +24,12 @@ import { asMetadata } from './json.js';
 export class PrismaAuditLogRepository implements AuditLogRepository {
   public constructor(@Inject(PrismaClient) private readonly prisma: PrismaClient) {}
 
-  public async record(input: NewAuditLogInput): Promise<void> {
-    await this.prisma.auditLog.create({
+  public async record(input: NewAuditLogInput, tx?: TransactionContext): Promise<void> {
+    // Joining the caller's transaction when one is passed is what makes a
+    // privileged change and its audit record atomic (AGENTS.md section 83).
+    const db = tx ?? this.prisma;
+
+    await db.auditLog.create({
       data: {
         actorUserId: input.actorUserId,
         actorRole: input.actorRole === null ? null : (input.actorRole as never),

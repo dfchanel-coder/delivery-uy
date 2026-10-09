@@ -373,10 +373,11 @@ Run against a local sink outside the repository (not a committed fixture), with
 
 ## IN_PROGRESS
 
-- PHASE 04 - Users and Roles. CI run #7 (`461487a`, 2026-10-09) confirmed the
-  slice: all four jobs green, including the integration job against pinned
-  `postgres:16` + `redis:7`. One item remains, the transactional unit of work for
-  the feature-flag toggle and its audit write (CURRENT RISKS).
+- PHASE 04 - Users and Roles. Every open item is implemented. The last one, the
+  transactional unit of work for the feature-flag toggle and its audit write, now
+  runs through a `UnitOfWork` port (`common/database/unit-of-work.ts`) whose
+  Prisma adapter wraps both writes in one `$transaction`. The phase closes when
+  the CI run for that commit is green.
 
   The roles and the permission model were already in place and the three global
   guards were already proven in isolation (58 tests: `rbac.guards.spec.ts`,
@@ -704,15 +705,15 @@ a wrong password returning `401` with the error envelope.
 
 ## NEXT
 
-1. PHASE 04 - the CI run is green and the phase is down to one open item. CI run
-   #7 (`461487a`, 2026-10-09) passed all four jobs: verify (lint, typecheck,
+1. PHASE 04 - close it on the CI run for the transactional toggle. CI run #7
+   (`461487a`, 2026-10-09) already passed all four jobs: verify (lint, typecheck,
    build, admin panel, unit/API tests, formatting), Dart, compose (both stacks
    boot and the application is verified through the published ports) and the
-   integration job against pinned `postgres:16` + `redis:7`, which includes the
-   `users` Prisma adapter spec. What remains before the phase can close is the
-   transactional unit of work for the feature-flag toggle and its audit write
-   (CURRENT RISKS); the permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`
-   stay empty until an endpoint needs one
+   integration job against pinned `postgres:16` + `redis:7`. The feature-flag
+   toggle and its audit write now share one transaction through the `UnitOfWork`
+   port, with a rollback integration spec; the phase closes when the next CI run
+   proves it. The permission names for `CUSTOMER`, `MERCHANT` and `DRIVER` stay
+   empty until an endpoint needs one
 2. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the
    existing `TokenStore` port. Deliberately deferred: both apps are placeholders,
    so the file would be written against nothing and would only look finished
@@ -743,12 +744,6 @@ a wrong password returning `401` with the error envelope.
 - Docker unavailable in the current environment, so local compose execution is not
   possible. GitHub Actions run #3 booted both stacks and passed all checks; local
   container parity is an environment limitation, not an open project criterion.
-- The feature-flag toggle and its `audit_logs` write are two awaited statements,
-  not one transaction. A crash between them can leave a flag changed with no
-  record of who changed it. The audit write is awaited, so a failed write fails
-  the request, but it cannot roll back a flag that was already updated. Closing
-  this needs a transactional unit of work shared by `admin`, `audit` and
-  `platform`
 - `@nestjs/cli` pulls `@swc/core` as an optional peer; it is explicitly denied in
   `pnpm-workspace.yaml` because the project compiles with `tsc -b` (ADR-017)
 - `@node-rs/argon2` needs a prebuilt binary for the target platform. None is

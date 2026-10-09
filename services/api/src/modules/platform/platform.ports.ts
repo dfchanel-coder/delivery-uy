@@ -7,6 +7,8 @@
  * that exercises `admin:feature-flags:write` end to end.
  */
 
+import type { TransactionContext } from '../../common/database/unit-of-work.js';
+
 export interface FeatureFlagRecord {
   readonly key: string;
   readonly scope: string;
@@ -37,10 +39,15 @@ export interface FeatureFlagRepository {
    * Returns `null` when the key does not exist. It never creates a flag: a
    * toggle that silently invents a flag would let a typo define platform
    * behaviour (AGENTS.md section 52).
+   *
+   * When `tx` is passed, both the read and the write join the caller's
+   * transaction, so the change commits only if the rest of the unit of work
+   * does (AGENTS.md section 83).
    */
   setEnabled(
     key: string,
     enabled: boolean,
     updatedByUserId: string | null,
+    tx?: TransactionContext,
   ): Promise<FeatureFlagChange | null>;
 }

@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { AdminFeatureFlag } from '@deliveryuy/types';
+import type { TransactionContext } from '../../common/database/unit-of-work.js';
 import { ApiException } from '../../common/errors/api-exception.js';
 import { FEATURE_FLAG_REPOSITORY } from './platform.tokens.js';
 import type { FeatureFlagRecord, FeatureFlagRepository } from './platform.ports.js';
@@ -35,13 +36,18 @@ export class PlatformService {
    *
    * A missing key is `NOT_FOUND`: the caller asked to change something that does
    * not exist, which is a client mistake, not a reason to create it.
+   *
+   * `tx` carries the caller's transaction when the toggle is one write in a
+   * larger unit of work, so the change joins it instead of committing on its
+   * own (AGENTS.md section 83).
    */
   public async setFeatureFlagEnabled(
     key: string,
     enabled: boolean,
     updatedByUserId: string | null,
+    tx?: TransactionContext,
   ): Promise<FeatureFlagChangeView> {
-    const change = await this.flags.setEnabled(key, enabled, updatedByUserId);
+    const change = await this.flags.setEnabled(key, enabled, updatedByUserId, tx);
 
     if (change === null) {
       throw ApiException.notFound('NOT_FOUND', `Feature flag "${key}" does not exist.`);

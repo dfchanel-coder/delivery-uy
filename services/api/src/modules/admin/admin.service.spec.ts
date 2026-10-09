@@ -4,6 +4,7 @@ import {
   InMemoryAuditLogRepository,
   InMemoryFeatureFlagRepository,
   InMemoryRiskEventReader,
+  InMemoryUnitOfWork,
   StubAdminReadModel,
 } from '../../testing/admin-doubles.js';
 import type { AuditActor } from '../audit/audit.ports.js';
@@ -46,21 +47,24 @@ interface Context {
   logs: InMemoryAuditLogRepository;
   riskEvents: InMemoryRiskEventReader;
   flags: InMemoryFeatureFlagRepository;
+  unitOfWork: InMemoryUnitOfWork;
 }
 
 function buildService(): Context {
   const logs = new InMemoryAuditLogRepository();
   const riskEvents = new InMemoryRiskEventReader();
   const flags = new InMemoryFeatureFlagRepository();
+  const unitOfWork = new InMemoryUnitOfWork();
   flags.seed(flag());
 
   const service = new AdminService(
     new StubAdminReadModel({ ...emptyPanelSummary(), usersTotal: 7 }),
+    unitOfWork,
     new AuditService(logs, riskEvents),
     new PlatformService(flags),
   );
 
-  return { service, logs, riskEvents, flags };
+  return { service, logs, riskEvents, flags, unitOfWork };
 }
 
 describe('AdminService panel and lists', () => {
@@ -86,6 +90,7 @@ describe('AdminService panel and lists', () => {
     const flags = new InMemoryFeatureFlagRepository();
     const service = new AdminService(
       new StubAdminReadModel({ ...emptyPanelSummary(), usersTotal: 7 }),
+      new InMemoryUnitOfWork(),
       new AuditService(logs, riskEvents),
       new PlatformService(flags),
     );
@@ -134,6 +139,16 @@ describe('AdminService.setFeatureFlagEnabled', () => {
       userAgent: 'test-agent',
       correlationId: 'request-1',
     });
+  });
+
+  it('runs the flag write and the audit write inside one unit of work', async () => {
+    const { service, unitOfWork, flags, logs } = buildService();
+
+    await service.setFeatureFlagEnabled(ACTOR, 'cashPayments', true);
+
+    expect(unitOfWork.transactions).toBe(1);
+    expect((await flags.list()).find((item) => item.key === 'cashPayments')?.enabled).toBe(true);
+    expect(logs.written).toHaveLength(1);
   });
 
   it('does not write an audit entry when the flag does not exist', async () => {

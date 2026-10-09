@@ -2,6 +2,8 @@ import { Global, Inject, Injectable, Logger, Module, type OnModuleDestroy } from
 import { PrismaClient, createDatabaseClient } from '@deliveryuy/database';
 import { AppConfigModule } from '../config/app-config.module.js';
 import { AppConfigService } from '../config/app-config.service.js';
+import { PrismaUnitOfWork } from './prisma-unit-of-work.js';
+import { UNIT_OF_WORK } from './unit-of-work.js';
 
 /**
  * Closes the shared client on shutdown.
@@ -51,7 +53,9 @@ export class DatabaseShutdown implements OnModuleDestroy {
       },
     },
     DatabaseShutdown,
+    PrismaUnitOfWork,
+    { provide: UNIT_OF_WORK, useExisting: PrismaUnitOfWork },
   ],
-  exports: [PrismaClient],
+  exports: [PrismaClient, UNIT_OF_WORK],
 })
 export class DatabaseModule {}

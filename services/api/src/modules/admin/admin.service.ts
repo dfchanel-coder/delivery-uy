@@ -5,6 +5,7 @@ import type {
   AdminPanelSummary,
   AdminRiskEvent,
 } from '@deliveryuy/types';
+import { UNIT_OF_WORK, type UnitOfWork } from '../../common/database/unit-of-work.js';
 import type { PagedResult } from '../../common/pagination/paged-result.js';
 import type { AuditActor } from '../audit/audit.ports.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -40,6 +41,7 @@ export interface AdminRiskEventQuery {
 export class AdminService {
   public constructor(
     @Inject(ADMIN_READ_MODEL) private readonly readModel: AdminReadModel,
+    @Inject(UNIT_OF_WORK) private readonly unitOfWork: UnitOfWork,
     private readonly audit: AuditService,
     private readonly platform: PlatformService,
   ) {}
@@ -63,31 +65,36 @@ export class AdminService {
   /**
    * Toggles a feature flag and records who did it (AGENTS.md sections 53, 93).
    *
-   * The change and its audit entry are two writes, not one transaction: the
-   * audit port has no transaction handle yet. The record is awaited, so a failed
-   * audit write fails the request instead of dropping the entry silently, but a
-   * crash between the two writes could still leave a changed flag with no record.
-   * Closing that gap needs a transactional unit of work - the same primitive the
-   * payment module will require - and it is tracked in PROJECT_STATE.md rather
-   * than presented here as already atomic.
+   * Both writes run inside one unit of work: the flag update and its audit entry
+   * commit together or not at all. A crash after the update but before the audit
+   * insert now rolls the update back, so a flag can no longer change with no
+   * record of who changed it (AGENTS.md section 83). A missing flag throws
+   * `NOT_FOUND` from the platform service inside the transaction, which rolls
+   * back and writes no audit entry.
    */
   public async setFeatureFlagEnabled(
     actor: AuditActor,
     key: string,
     enabled: boolean,
   ): Promise<AdminFeatureFlag> {
-    const change = await this.platform.setFeatureFlagEnabled(key, enabled, actor.userId);
+    return this.unitOfWork.runInTransaction(async (tx) => {
+      const change = await this.platform.setFeatureFlagEnabled(key, enabled, actor.userId, tx);
 
-    await this.audit.record(actor, {
-      action: FEATURE_FLAG_TOGGLED_ACTION,
-      entityType: 'FeatureFlag',
-      entityId: change.after.key,
-      metadata: {
-        enabled: change.after.enabled,
-        previousEnabled: change.before.enabled,
-      },
+      await this.audit.record(
+        actor,
+        {
+          action: FEATURE_FLAG_TOGGLED_ACTION,
+          entityType: 'FeatureFlag',
+          entityId: change.after.key,
+          metadata: {
+            enabled: change.after.enabled,
+            previousEnabled: change.before.enabled,
+          },
+        },
+        tx,
+      );
+
+      return change.after;
     });
-
-    return change.after;
   }
 }

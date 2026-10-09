@@ -1,4 +1,5 @@
 import type { Cursor } from '../../common/pagination/cursor.js';
+import type { TransactionContext } from '../../common/database/unit-of-work.js';
 
 /**
  * Audit persistence ports (docs/MODULE_BOUNDARIES.md: `audit` owns
@@ -80,7 +81,14 @@ export interface RepositoryPage<T> {
 }
 
 export interface AuditLogRepository {
-  record(input: NewAuditLogInput): Promise<void>;
+  /**
+   * Appends one audit entry.
+   *
+   * When `tx` is passed, the insert joins the caller's transaction, so a
+   * privileged change and its audit record commit or roll back together
+   * (AGENTS.md sections 29, 83).
+   */
+  record(input: NewAuditLogInput, tx?: TransactionContext): Promise<void>;
   list(query: AuditLogQuery): Promise<RepositoryPage<AuditLogRecord>>;
 }
 

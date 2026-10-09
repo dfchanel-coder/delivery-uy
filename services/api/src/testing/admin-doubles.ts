@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AdminPanelSummary } from '@deliveryuy/types';
 import type { Cursor } from '../common/pagination/cursor.js';
+import type { TransactionContext, UnitOfWork } from '../common/database/unit-of-work.js';
 import type { AdminReadModel } from '../modules/admin/admin.ports.js';
 import type {
   AuditLogQuery,
@@ -143,6 +144,26 @@ export class StubAdminReadModel implements AdminReadModel {
 
   public async summary(): Promise<AdminPanelSummary> {
     return this.value;
+  }
+}
+
+/**
+ * A unit of work that runs the callback immediately with no transaction.
+ *
+ * The in-memory repositories ignore the transaction handle, so the HTTP and
+ * service specs exercise the composition (the toggle is followed by the audit
+ * write) without a database. Atomicity itself is not something a double can
+ * prove - that is what the transaction integration spec is for - but the count
+ * of opened transactions is observable, so a spec can assert the service really
+ * runs the two writes as one unit.
+ */
+export class InMemoryUnitOfWork implements UnitOfWork {
+  public transactions = 0;
+
+  public async runInTransaction<T>(work: (tx: TransactionContext) => Promise<T>): Promise<T> {
+    this.transactions += 1;
+
+    return work(undefined as unknown as TransactionContext);
   }
 }
 

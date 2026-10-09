@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PrismaClient } from '@deliveryuy/database';
+import type { TransactionContext } from '../../../common/database/unit-of-work.js';
 import type {
   FeatureFlagChange,
   FeatureFlagRecord,
@@ -21,12 +22,17 @@ export class PrismaFeatureFlagRepository implements FeatureFlagRepository {
     key: string,
     enabled: boolean,
     updatedByUserId: string | null,
+    tx?: TransactionContext,
   ): Promise<FeatureFlagChange | null> {
-    const before = await this.prisma.featureFlag.findUnique({ where: { key } });
+    // The read and the write share `db`, so a transaction sees a consistent
+    // snapshot and both commit or roll back together (AGENTS.md section 83).
+    const db = tx ?? this.prisma;
+
+    const before = await db.featureFlag.findUnique({ where: { key } });
 
     if (before === null) return null;
 
-    const after = await this.prisma.featureFlag.update({
+    const after = await db.featureFlag.update({
       where: { key },
       data: { enabled, updatedByUserId },
     });
