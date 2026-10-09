@@ -2,8 +2,8 @@
 
 LAST_UPDATED: 2026-10-09
 
-CURRENT_PHASE: PHASE 04
-CURRENT_MODULE: PHASE 04 - the admin surface (`AdminModule` + `AuditModule` + `PlatformModule`) that exercises the proven RBAC matrix end to end, the admin users API (`UsersModule`), plus `SUPER_ADMIN`, `SUPPORT` and `FINANCE` in the development seed
+CURRENT_PHASE: PHASE 05
+CURRENT_MODULE: PHASE 05 - Merchant (not started). Registration, business profile, RUT fields, addresses, geographic location, approval flow, opening hours, merchant staff and admin review. PHASE 04 is complete; see ROADMAP.MD PHASE 05 and docs/REQUIREMENTS.md for the entry point.
 
 ---
 
@@ -371,70 +371,76 @@ Run against a local sink outside the repository (not a committed fixture), with
 
 ---
 
+### PHASE 04 - Users and Roles
+
+**COMPLETE:** CI run #9 (`2b8d515`, 2026-10-09) passed all four jobs: verify
+(lint, typecheck, build, admin panel, unit/API tests, formatting), Dart, compose
+(both stacks boot and the application is verified through the published ports)
+and the integration job against pinned `postgres:16` + `redis:7` with no skips,
+which includes the `users` Prisma adapter spec and the transaction rollback spec.
+
+The roles and the permission model were already in place and the three global
+guards were already proven in isolation (58 tests: `rbac.guards.spec.ts`,
+`jwt-auth.guard.spec.ts`, `endpoint-security.spec.ts`). What was missing was a
+route, which is the dangerous shape of untested code: the guards run in front of
+every request, so a fault would have stayed invisible until the first protected
+endpoint existed - at which point it is an authorization bypass, not a failing
+test.
+
+The first slice added that surface. `AdminModule` exposes five routes over the
+tables that already exist, and each declares exactly one `@Permissions(...)` that
+no route had ever required: `GET /admin/panel` and `GET /admin/feature-flags`
+(`admin:panel:read`), `GET /admin/audit-logs` (`admin:audit:read`),
+`GET /admin/risk-events` (`admin:risk-events:read`) and
+`PATCH /admin/feature-flags/:key` (`admin:feature-flags:write`). `ADMIN` is not
+unlimited: it reads the panel, flags and risk events but is refused the audit
+trail and every toggle. `SUPPORT` and `FINANCE` read only the panel. Only
+`SUPER_ADMIN` toggles a flag, and the toggle writes an `audit_logs` row naming
+the actor, the role the token carried, both sides of the change, the IP address
+and the correlation id.
+
+Ownership follows `docs/MODULE_BOUNDARIES.md`: `AuditModule` owns `audit_logs`
+and `risk_events` (reads only, plus the writer the admin command calls),
+`PlatformModule` owns `feature_flags`, and `AdminModule` owns the HTTP surface
+and a read model. The admin service calls the other modules' **services**, never
+their repositories.
+
+A second slice added the admin users API, which is the phase's namesake.
+`services/api/src/modules/users` serves `GET /users` (paginated), `GET /users/:id`,
+`PATCH /users/:id/status` and `PATCH /users/:id/roles` behind the
+`USER_ADMIN_REPOSITORY` port, with `PrismaUserAdminRepository` as the production
+adapter. Each route declares `admin:users:read` (ADMIN and SUPER_ADMIN) or
+`admin:users:manage` (SUPER_ADMIN only), so `ADMIN` can read the directory but
+cannot suspend an account or change a role. The service refuses to suspend the
+last active SUPER_ADMIN, or to strip that role from it. The request DTOs use
+`class-validator`, matching the global `ValidationPipe` (`whitelist` +
+`forbidNonWhitelisted`). `users.e2e.spec.ts` (12 tests) drives real HTTP with the
+port replaced by an in-memory double, so the suite no longer needs PostgreSQL;
+the Prisma adapter keeps its coverage in the integration suite
+(`prisma-user-admin.repository.integration.spec.ts`).
+
+The phase closed on a `UnitOfWork` port (`common/database/unit-of-work.ts`)
+whose Prisma adapter wraps work in one `$transaction`. `AuditService.record` and
+`PlatformService.setFeatureFlagEnabled` accept an optional `TransactionContext`
+and forward it to their repositories, so `AdminService.setFeatureFlagEnabled`
+runs the flag update and its audit write as one atomic unit: a failure between
+them rolls the update back instead of leaving a changed flag with no record.
+`admin-transaction.integration.spec.ts` proves the rollback against real
+PostgreSQL.
+
+Testing: 763 unit/API tests across 36 files, plus the integration suite for the
+Prisma adapters. `SUPER_ADMIN`, `SUPPORT` and `FINANCE` are seeded, which added
+six `SEED_*` variables across `.env.example`, `readme.md`, the CI workflow and
+`assert-seeded-users.mjs`.
+
+Not yet done: permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`, which
+stay empty until an endpoint needs one (AGENTS.md: an empty list is accurate,
+not incomplete).
+
+---
+
 ## IN_PROGRESS
 
-- PHASE 04 - Users and Roles. Every open item is implemented. The last one, the
-  transactional unit of work for the feature-flag toggle and its audit write, now
-  runs through a `UnitOfWork` port (`common/database/unit-of-work.ts`) whose
-  Prisma adapter wraps both writes in one `$transaction`. The phase closes when
-  the CI run for that commit is green.
-
-  The roles and the permission model were already in place and the three global
-  guards were already proven in isolation (58 tests: `rbac.guards.spec.ts`,
-  `jwt-auth.guard.spec.ts`, `endpoint-security.spec.ts`). What was missing was a
-  route, which is the dangerous shape of untested code: the guards run in front of
-  every request, so a fault would have stayed invisible until the first protected
-  endpoint existed - at which point it is an authorization bypass, not a failing
-  test.
-
-  This slice adds that surface. `AdminModule` exposes five routes over the tables
-  that already exist, and each declares exactly one `@Permissions(...)` that no
-  route had ever required: `GET /admin/panel` and `GET /admin/feature-flags`
-  (`admin:panel:read`), `GET /admin/audit-logs` (`admin:audit:read`),
-  `GET /admin/risk-events` (`admin:risk-events:read`) and
-  `PATCH /admin/feature-flags/:key` (`admin:feature-flags:write`). `ADMIN` is not
-  unlimited: it reads the panel, flags and risk events but is refused the audit
-  trail and every toggle. `SUPPORT` and `FINANCE` read only the panel. Only
-  `SUPER_ADMIN` toggles a flag, and the toggle writes an `audit_logs` row naming
-  the actor, the role the token carried, both sides of the change, the IP address
-  and the correlation id.
-
-  Ownership follows `docs/MODULE_BOUNDARIES.md`: `AuditModule` owns `audit_logs`
-  and `risk_events` (reads only, plus the writer the admin command calls),
-  `PlatformModule` owns `feature_flags`, and `AdminModule` owns the HTTP surface
-  and a read model. The admin service calls the other modules' **services**, never
-  their repositories.
-
-  Testing: 744 unit/API tests across 34 files (57 new: the four service/controller
-  specs, `pagination.spec.ts`, `response-envelope.interceptor.spec.ts` and
-  `admin.e2e.spec.ts` with 20 tests driving the real guard chain with signed
-  tokens), plus four new integration specs for the Prisma adapters (11 files / 64
-  tests in the integration suite). `SUPER_ADMIN`, `SUPPORT` and `FINANCE` are now
-  seeded, which required six new `SEED_*` variables across `.env.example`,
-  `readme.md`, the CI workflow and `assert-seeded-users.mjs`.
-
-  A second slice adds the admin users API, which is the phase's namesake.
-  `services/api/src/modules/users` serves `GET /users` (paginated), `GET /users/:id`,
-  `PATCH /users/:id/status` and `PATCH /users/:id/roles` behind the
-  `USER_ADMIN_REPOSITORY` port, with `PrismaUserAdminRepository` as the production
-  adapter. Each route declares `admin:users:read` (ADMIN and SUPER_ADMIN) or
-  `admin:users:manage` (SUPER_ADMIN only), so `ADMIN` can read the directory but
-  cannot suspend an account or change a role. The service refuses to suspend the
-  last active SUPER_ADMIN, or to strip that role from it. The request DTOs use
-  `class-validator`, matching the global `ValidationPipe` (`whitelist` +
-  `forbidNonWhitelisted`). `users.e2e.spec.ts` (12 tests) drives real HTTP with the
-  port replaced by an in-memory double, so the suite no longer needs PostgreSQL;
-  the Prisma adapter keeps its coverage in the integration suite
-  (`prisma-user-admin.repository.integration.spec.ts`). With this slice, `pnpm
-  test` is 762 tests across 36 files.
-
-  Not yet done: permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`, which
-  stay empty until an endpoint needs one (AGENTS.md: an empty list is accurate,
-  not incomplete). CI has not yet run this slice; the phase closes when it does.
-  Known follow-up: the flag update and its audit write are two awaited statements
-  rather than one transaction, so a crash between them could leave a flag changed
-  with no record of who changed it. Closing it needs a transactional unit of work
-  shared by both modules; it is tracked under CURRENT RISKS.
 - Mobile: `login`, `register`, `logout`, `verify-email` and secure session
   persistence exist end to end and are proven on the emulator (ADR-021).
   `apps/merchant` and `apps/driver` still hold their sessions in memory only, and
@@ -705,15 +711,14 @@ a wrong password returning `401` with the error envelope.
 
 ## NEXT
 
-1. PHASE 04 - close it on the CI run for the transactional toggle. CI run #7
-   (`461487a`, 2026-10-09) already passed all four jobs: verify (lint, typecheck,
-   build, admin panel, unit/API tests, formatting), Dart, compose (both stacks
-   boot and the application is verified through the published ports) and the
-   integration job against pinned `postgres:16` + `redis:7`. The feature-flag
-   toggle and its audit write now share one transaction through the `UnitOfWork`
-   port, with a rollback integration spec; the phase closes when the next CI run
-   proves it. The permission names for `CUSTOMER`, `MERCHANT` and `DRIVER` stay
-   empty until an endpoint needs one
+1. PHASE 05 - Merchant. Build registration, business profile, RUT fields,
+   addresses, geographic location, approval flow, opening hours and merchant
+   staff/admin review, following the module boundaries and the migration process in
+   AGENTS.md (sections 10, 25, 66, 80). The prerequisite slices are complete: CI
+   run #9 (`2b8d515`, 2026-10-09) closed PHASE 04 with all four jobs green,
+   including the integration job against pinned `postgres:16` + `redis:7`. The
+   permission names for `CUSTOMER`, `MERCHANT` and `DRIVER` stay empty until an
+   endpoint needs one
 2. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the
    existing `TokenStore` port. Deliberately deferred: both apps are placeholders,
    so the file would be written against nothing and would only look finished

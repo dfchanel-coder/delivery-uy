@@ -398,6 +398,9 @@ passed against the pinned Redis 7.4.11, and the full suite is green.
 
 ## PHASE 04 - Users and Roles
 
+**COMPLETE** - CI run #9 (`2b8d515`, 2026-10-09) passed all four jobs, including
+the integration suite against pinned `postgres:16` + `redis:7` with no skips.
+
 Implement:
 
 CUSTOMER
