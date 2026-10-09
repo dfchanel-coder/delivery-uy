@@ -1,9 +1,9 @@
 # DeliveryUY Project State
 
-LAST_UPDATED: 2026-10-08
+LAST_UPDATED: 2026-10-09
 
 CURRENT_PHASE: PHASE 04
-CURRENT_MODULE: PHASE 04 - the admin surface (`AdminModule` + `AuditModule` + `PlatformModule`) that exercises the proven RBAC matrix end to end, plus `SUPER_ADMIN`, `SUPPORT` and `FINANCE` in the development seed
+CURRENT_MODULE: PHASE 04 - the admin surface (`AdminModule` + `AuditModule` + `PlatformModule`) that exercises the proven RBAC matrix end to end, the admin users API (`UsersModule`), plus `SUPER_ADMIN`, `SUPPORT` and `FINANCE` in the development seed
 
 ---
 
@@ -410,6 +410,21 @@ Run against a local sink outside the repository (not a committed fixture), with
   seeded, which required six new `SEED_*` variables across `.env.example`,
   `readme.md`, the CI workflow and `assert-seeded-users.mjs`.
 
+  A second slice adds the admin users API, which is the phase's namesake.
+  `services/api/src/modules/users` serves `GET /users` (paginated), `GET /users/:id`,
+  `PATCH /users/:id/status` and `PATCH /users/:id/roles` behind the
+  `USER_ADMIN_REPOSITORY` port, with `PrismaUserAdminRepository` as the production
+  adapter. Each route declares `admin:users:read` (ADMIN and SUPER_ADMIN) or
+  `admin:users:manage` (SUPER_ADMIN only), so `ADMIN` can read the directory but
+  cannot suspend an account or change a role. The service refuses to suspend the
+  last active SUPER_ADMIN, or to strip that role from it. The request DTOs use
+  `class-validator`, matching the global `ValidationPipe` (`whitelist` +
+  `forbidNonWhitelisted`). `users.e2e.spec.ts` (12 tests) drives real HTTP with the
+  port replaced by an in-memory double, so the suite no longer needs PostgreSQL;
+  the Prisma adapter keeps its coverage in the integration suite
+  (`prisma-user-admin.repository.integration.spec.ts`). With this slice, `pnpm
+  test` is 762 tests across 36 files.
+
   Not yet done: permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`, which
   stay empty until an endpoint needs one (AGENTS.md: an empty list is accurate,
   not incomplete). CI has not yet run this slice; the phase closes when it does.
@@ -687,9 +702,9 @@ a wrong password returning `401` with the error envelope.
 
 ## NEXT
 
-1. PHASE 04 - close it on CI: push the admin surface slice and confirm the green
-   run (unit/API, both stacks, the integration suite against pinned
-   PostgreSQL/Redis with no skips, and Dart). Only the permission names for
+1. PHASE 04 - close it on CI: push the admin surface and admin users slices and
+   confirm the green run (unit/API, both stacks, the integration suite against
+   pinned PostgreSQL/Redis with no skips, and Dart). Only the permission names for
    `CUSTOMER`, `MERCHANT` and `DRIVER` remain once an endpoint needs one; they are
    intentionally empty today
 2. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the

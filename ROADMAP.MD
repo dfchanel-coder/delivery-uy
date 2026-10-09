@@ -415,7 +415,7 @@ Add permissions and guards.
 The roles and the permission model already exist, and this phase starts by
 proving them rather than by adding them:
 
-- `packages/auth/src/rbac.ts` holds the 7 roles and the 16 `admin:*` permissions
+- `packages/auth/src/rbac.ts` holds the 7 roles and the 18 `admin:*` permissions
   in a frozen matrix. `CUSTOMER`, `MERCHANT` and `DRIVER` map to an empty
   permission list, which is accurate rather than incomplete: no endpoint needs one
   yet
@@ -477,7 +477,7 @@ is Memurai 8.2.10, so the pinned-version claim comes from CI.
 
 ### The admin surface, and the endpoint the phase was missing (2026-10-08)
 
-The phase could not close on guard unit tests alone: the 16 `admin:*` permissions
+The phase could not close on guard unit tests alone: the `admin:*` permissions
 named capabilities that no route required, so the matrix was tested but never
 applied. This slice adds the first surface that uses it.
 
@@ -525,10 +525,41 @@ The three missing pieces from the previous list are now two: the endpoint exists
 and the seed creates `SUPER_ADMIN`, `SUPPORT` and `FINANCE` (six new `SEED_*`
 variables across `.env.example`, `readme.md` and the CI workflow).
 
+### The admin users API, the phase's namesake (2026-10-09)
+
+The admin surface proved the guard chain but left "Users and Roles" without the
+user-management routes the phase is named after. `UsersModule` adds them:
+
+| Route | Permission |
+| ----- | ---------- |
+| `GET /api/v1/users` | `admin:users:read` |
+| `GET /api/v1/users/:id` | `admin:users:read` |
+| `PATCH /api/v1/users/:id/status` | `admin:users:manage` |
+| `PATCH /api/v1/users/:id/roles` | `admin:users:manage` |
+
+`admin:users:read` is granted to `ADMIN` and `SUPER_ADMIN`; `admin:users:manage`
+only to `SUPER_ADMIN`, so an `ADMIN` can list and read the directory but never
+suspend an account or change a role. The service refuses to suspend the last
+active `SUPER_ADMIN`, or to remove that role from it, so the platform cannot be
+locked out of its own top role.
+
+The routes sit behind the `USER_ADMIN_REPOSITORY` port, with
+`PrismaUserAdminRepository` as the production adapter and an in-memory double for
+the HTTP spec. `users.e2e.spec.ts` (12 tests) drives the real guard chain, the
+validation pipe and the response envelope without PostgreSQL. The request DTOs use
+`class-validator`, matching the global `ValidationPipe` (`whitelist` +
+`forbidNonWhitelisted`); an earlier `nestjs-zod` draft was rejected with `400` by
+that same pipe. `UserListResponse` / `UserDetailResponse` live in `packages/types`,
+and the Prisma adapter keeps its coverage in the integration suite
+(`prisma-user-admin.repository.integration.spec.ts`).
+
+With this slice, `pnpm test` is 762 tests across 36 files.
+
 Remaining before this phase can close:
 
-1. CI confirmation of this slice. It is committed locally but has not run on
-   GitHub Actions yet, so the phase is not closed until the green run exists
+1. CI confirmation of the admin surface and the users API. Both are pushed but
+   have not run on GitHub Actions yet, so the phase is not closed until the green
+   run exists
 2. permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`, once there are
    endpoints that need them. The lists stay empty until then: an empty list is
    accurate, not incomplete

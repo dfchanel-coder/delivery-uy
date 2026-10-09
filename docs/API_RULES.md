@@ -211,6 +211,26 @@ token carried, both sides of the change and the request correlation id. No
 authorization decision is ever taken from the request body or query string
 (SECURITY.md "Authorization").
 
+## Admin users API as of PHASE 04
+
+`UsersModule` is the second surface that requires a permission, and it owns the
+user-management routes the phase is named after:
+
+| Route | Permission | Roles that hold it |
+| ----- | ---------- | ------------------ |
+| `GET /api/v1/users` | `admin:users:read` | `ADMIN`, `SUPER_ADMIN` |
+| `GET /api/v1/users/:id` | `admin:users:read` | `ADMIN`, `SUPER_ADMIN` |
+| `PATCH /api/v1/users/:id/status` | `admin:users:manage` | `SUPER_ADMIN` |
+| `PATCH /api/v1/users/:id/roles` | `admin:users:manage` | `SUPER_ADMIN` |
+
+`GET /users` is paginated (`page`/`limit`) and `GET /users/:id` answers `404
+NOT_FOUND` for an unknown id. The two `PATCH` routes answer `400
+VALIDATION_FAILED` for a body the DTO does not accept: the DTOs are
+`class-validator`, so the global `ValidationPipe` (`whitelist` +
+`forbidNonWhitelisted`) rejects unknown fields instead of ignoring them. The
+service refuses to suspend the last active `SUPER_ADMIN`, or to remove that role
+from it, so the platform cannot be locked out of its own top role.
+
 ---
 
 # Documentation

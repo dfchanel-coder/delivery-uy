@@ -333,11 +333,17 @@ resolves it from the role names the **signed access token** carried.
 | `GET /admin/audit-logs` | `admin:audit:read` (SUPER_ADMIN only) |
 | `GET /admin/risk-events` | `admin:risk-events:read` (ADMIN, SUPER_ADMIN) |
 | `PATCH /admin/feature-flags/:key` | `admin:feature-flags:write` (SUPER_ADMIN only) |
+| `GET /users` | `admin:users:read` (ADMIN, SUPER_ADMIN) |
+| `GET /users/:id` | `admin:users:read` (ADMIN, SUPER_ADMIN) |
+| `PATCH /users/:id/status` | `admin:users:manage` (SUPER_ADMIN only) |
+| `PATCH /users/:id/roles` | `admin:users:manage` (SUPER_ADMIN only) |
 
-`ADMIN` is not treated as unlimited: it cannot read the audit trail and cannot
-toggle a feature flag, which are exactly the two actions whose misuse is hardest
-to notice. `SUPER_ADMIN` is the only role that can, so the most dangerous
-capability is the rarest one.
+`ADMIN` is not treated as unlimited: it cannot read the audit trail, cannot
+toggle a feature flag and cannot change a user's status or roles, which are
+exactly the actions whose misuse is hardest to notice. `SUPER_ADMIN` is the only
+role that can, so the most dangerous capability is the rarest one. The user
+service also refuses to suspend the last active `SUPER_ADMIN`, or to remove that
+role from it, so the platform cannot be locked out of its own top role.
 
 Every toggle writes an `audit_logs` entry before the response is returned:
 actor user id, the role the token carried at the time, both sides of the change,
