@@ -557,9 +557,9 @@ With this slice, `pnpm test` is 762 tests across 36 files.
 
 Remaining before this phase can close:
 
-1. CI confirmation of the admin surface and the users API. Both are pushed but
-   have not run on GitHub Actions yet, so the phase is not closed until the green
-   run exists
+1. CI confirmation of the admin surface and the users API. **Done:** CI run #7
+   (`461487a`, 2026-10-09) passed all four jobs, including the integration job
+   against pinned `postgres:16` + `redis:7`
 2. permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`, once there are
    endpoints that need them. The lists stay empty until then: an empty list is
    accurate, not incomplete

@@ -373,8 +373,10 @@ Run against a local sink outside the repository (not a committed fixture), with
 
 ## IN_PROGRESS
 
-- PHASE 04 - Users and Roles. Two of the three open items are now closed and the
-  phase is waiting only on CI to confirm the new slice.
+- PHASE 04 - Users and Roles. CI run #7 (`461487a`, 2026-10-09) confirmed the
+  slice: all four jobs green, including the integration job against pinned
+  `postgres:16` + `redis:7`. One item remains, the transactional unit of work for
+  the feature-flag toggle and its audit write (CURRENT RISKS).
 
   The roles and the permission model were already in place and the three global
   guards were already proven in isolation (58 tests: `rbac.guards.spec.ts`,
@@ -702,11 +704,15 @@ a wrong password returning `401` with the error envelope.
 
 ## NEXT
 
-1. PHASE 04 - close it on CI: push the admin surface and admin users slices and
-   confirm the green run (unit/API, both stacks, the integration suite against
-   pinned PostgreSQL/Redis with no skips, and Dart). Only the permission names for
-   `CUSTOMER`, `MERCHANT` and `DRIVER` remain once an endpoint needs one; they are
-   intentionally empty today
+1. PHASE 04 - the CI run is green and the phase is down to one open item. CI run
+   #7 (`461487a`, 2026-10-09) passed all four jobs: verify (lint, typecheck,
+   build, admin panel, unit/API tests, formatting), Dart, compose (both stacks
+   boot and the application is verified through the published ports) and the
+   integration job against pinned `postgres:16` + `redis:7`, which includes the
+   `users` Prisma adapter spec. What remains before the phase can close is the
+   transactional unit of work for the feature-flag toggle and its audit write
+   (CURRENT RISKS); the permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`
+   stay empty until an endpoint needs one
 2. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the
    existing `TokenStore` port. Deliberately deferred: both apps are placeholders,
    so the file would be written against nothing and would only look finished
