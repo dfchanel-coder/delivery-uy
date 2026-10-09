@@ -1,0 +1,1 @@
+export const USER_ADMIN_REPOSITORY = Symbol('USER_ADMIN_REPOSITORY');

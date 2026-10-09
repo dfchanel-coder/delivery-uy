@@ -14,6 +14,7 @@ import { HealthModule } from './modules/health/health.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
 import { PlatformModule } from './modules/platform/platform.module.js';
+import { UsersModule } from './modules/users/users.module.js';
 
 /**
  * Application composition root (ARCHITECTURE.md section 4).
@@ -76,6 +77,7 @@ import { PlatformModule } from './modules/platform/platform.module.js';
     AuditModule,
     PlatformModule,
     AdminModule,
+    UsersModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

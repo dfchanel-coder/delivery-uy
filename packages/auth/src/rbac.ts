@@ -22,6 +22,8 @@ export type Role = (typeof ROLES)[number];
 
 export const PERMISSIONS = [
   'admin:panel:read',
+  'admin:users:read',
+  'admin:users:manage',
   'admin:merchants:review',
   'admin:merchants:suspend',
   'admin:drivers:review',
@@ -54,6 +56,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = O
   DRIVER: [],
   ADMIN: [
     'admin:panel:read',
+    'admin:users:read',
     'admin:merchants:review',
     'admin:drivers:review',
     'admin:orders:read',
@@ -63,6 +66,8 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = O
   ],
   SUPER_ADMIN: [
     'admin:panel:read',
+    'admin:users:read',
+    'admin:users:manage',
     'admin:merchants:review',
     'admin:merchants:suspend',
     'admin:drivers:review',
