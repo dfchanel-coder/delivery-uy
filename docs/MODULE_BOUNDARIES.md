@@ -79,7 +79,7 @@ settlements -> orders, payments, platform, audit
 billing     -> orders, settlements, platform, audit
 notifications -> platform, audit           (event consumers only)
 support     -> auth, orders, audit
-admin       -> every module's application service (never their repositories)
+admin       -> audit, platform, every module's application service (never their repositories)
 ```
 
 Forbidden without a new ADR:

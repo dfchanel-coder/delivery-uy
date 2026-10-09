@@ -319,6 +319,38 @@ Driver must not subscribe to unrelated deliveries.
 
 Important administrative actions require AuditLog.
 
+## Concrete design (implemented in PHASE 04)
+
+The admin surface is the first place the RBAC matrix is applied to a real
+request. Authorization is never read from the request body, the query string or
+the client: each route declares one `@Permissions(...)` and `PermissionsGuard`
+resolves it from the role names the **signed access token** carried.
+
+| Route | Permission |
+| ----- | ---------- |
+| `GET /admin/panel` | `admin:panel:read` |
+| `GET /admin/feature-flags` | `admin:panel:read` |
+| `GET /admin/audit-logs` | `admin:audit:read` (SUPER_ADMIN only) |
+| `GET /admin/risk-events` | `admin:risk-events:read` (ADMIN, SUPER_ADMIN) |
+| `PATCH /admin/feature-flags/:key` | `admin:feature-flags:write` (SUPER_ADMIN only) |
+
+`ADMIN` is not treated as unlimited: it cannot read the audit trail and cannot
+toggle a feature flag, which are exactly the two actions whose misuse is hardest
+to notice. `SUPER_ADMIN` is the only role that can, so the most dangerous
+capability is the rarest one.
+
+Every toggle writes an `audit_logs` entry before the response is returned:
+actor user id, the role the token carried at the time, both sides of the change,
+the IP address, a bounded user agent and the request correlation id. The role is
+recorded rather than resolved at read time, so a later change to the matrix does
+not rewrite history (AGENTS.md sections 20, 21, 29).
+
+The audit entry is written as its own awaited statement rather than inside a
+transaction with the flag update. That is a known limitation, tracked in
+`PROJECT_STATE.md`: a crash between the two writes can leave a flag changed with
+no record of who changed it. Closing it needs a transactional unit of work
+shared by both modules.
+
 Future production enhancement:
 
 MFA for privileged users.
@@ -617,7 +649,17 @@ would have had `null` returned as if it were one, and the failure would have
 surfaced later as a `TypeError` on `principal.roles` rather than at the one place
 whose message names `JwtAuthGuard`.
 
-Not yet proven: the matrix exercised end to end. No route uses `@Roles()` or
-`@Permissions()`, `AdminModule` does not exist, and the seed creates neither
-`SUPER_ADMIN` nor `SUPPORT` nor `FINANCE`, so a real deployment currently cannot
-produce a caller that any of the `admin:*` permissions are about.
+Now proven: the matrix exercised end to end. `AdminModule` exposes five routes,
+each carrying exactly one `@Permissions(...)`, and `admin.e2e.spec.ts` (20 tests)
+drives them through the real guard chain with signed tokens. An anonymous request
+is `401`; a `CUSTOMER` or `DRIVER` token is `403`; `ADMIN` reads the panel, feature
+flags and risk events but is refused the audit trail and every toggle; `SUPPORT`
+and `FINANCE` read the panel and are refused the audit trail, the risk events and
+the toggles; only `SUPER_ADMIN` toggles a flag, and the toggle writes an
+`audit_logs` row that the same role then reads back. A route that forgot
+`@Permissions(...)` would also fail `admin.controller.spec.ts`, which reads the
+metadata off every controller method.
+
+Still not exercised: the `CUSTOMER`, `MERCHANT` and `DRIVER` permission lists.
+They are empty because no endpoint needs one yet; `rbac.guards.spec.ts` still
+covers what the guards do for those roles.

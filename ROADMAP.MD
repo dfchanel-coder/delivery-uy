@@ -475,15 +475,67 @@ CI run #3 (2026-10-04) passed `pnpm verify` (685 tests / 27 files), the Dart gat
 `pnpm verify` and all six infrastructure steps also pass; the local Redis server
 is Memurai 8.2.10, so the pinned-version claim comes from CI.
 
+### The admin surface, and the endpoint the phase was missing (2026-10-08)
+
+The phase could not close on guard unit tests alone: the 16 `admin:*` permissions
+named capabilities that no route required, so the matrix was tested but never
+applied. This slice adds the first surface that uses it.
+
+`AdminModule` exposes five routes, each carrying exactly one `@Permissions(...)`:
+
+| Route | Permission |
+| ----- | ---------- |
+| `GET /api/v1/admin/panel` | `admin:panel:read` |
+| `GET /api/v1/admin/feature-flags` | `admin:panel:read` |
+| `GET /api/v1/admin/audit-logs` | `admin:audit:read` |
+| `GET /api/v1/admin/risk-events` | `admin:risk-events:read` |
+| `PATCH /api/v1/admin/feature-flags/:key` | `admin:feature-flags:write` |
+
+`ADMIN` is deliberately not unlimited: it reads the panel, the flags and the risk
+events, but is refused the audit trail and every toggle. `SUPPORT` and `FINANCE`
+read only the panel. `SUPER_ADMIN` is the only role that can change platform
+behaviour, and that write records an `audit_logs` entry (actor, the role the token
+carried, both sides of the change, IP address, correlation id) before the response
+is returned. Ownership follows `docs/MODULE_BOUNDARIES.md`: `audit` owns
+`audit_logs`/`risk_events`, `platform` owns `feature_flags`, and `admin` calls
+their **services**, never their repositories.
+
+Evidence:
+
+- `admin.e2e.spec.ts` (20 tests) drives the real guard chain with signed tokens:
+  anonymous is `401`; `CUSTOMER`/`DRIVER` are `403`; `ADMIN`, `SUPPORT` and
+  `FINANCE` are refused the audit trail and the toggle; the risk-events list is
+  refused to `SUPPORT`/`FINANCE`; only `SUPER_ADMIN` toggles a flag and then reads
+  the entry back; a missing key is `404 NOT_FOUND`; an invalid cursor is `400
+  VALIDATION_FAILED`; pagination walks with `nextCursor`
+- four service/controller specs (`admin.service.spec.ts` 6,
+  `admin.controller.spec.ts` 4, `audit.service.spec.ts` 10,
+  `platform.service.spec.ts` 4) and two common specs
+  (`pagination.spec.ts` 10, `response-envelope.interceptor.spec.ts` 5). The
+  controller spec reads the permission metadata off every method, so a future
+  route that forgets `@Permissions(...)` fails the suite instead of granting every
+  authenticated user access
+- four new integration specs for the Prisma adapters, covered by the CI
+  integration job against real PostgreSQL
+
+Local result: `pnpm verify` passes with 744 unit/API tests across 34 files; the
+integration suite collects 11 files / 64 tests. Dart is unchanged at 153.
+
+The three missing pieces from the previous list are now two: the endpoint exists,
+and the seed creates `SUPER_ADMIN`, `SUPPORT` and `FINANCE` (six new `SEED_*`
+variables across `.env.example`, `readme.md` and the CI workflow).
+
 Remaining before this phase can close:
 
-1. an endpoint that actually uses the mechanism. The 16 `admin:*` permissions
-   name capabilities that no route requires yet, so today the matrix is tested
-   but not exercised end to end. `AdminModule` does not exist
-2. `SUPER_ADMIN`, `SUPPORT` and `FINANCE` are absent from the seed, so the matrix
-   cannot be exercised against a real deployment
-3. permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`, once there are
-   endpoints that need them
+1. CI confirmation of this slice. It is committed locally but has not run on
+   GitHub Actions yet, so the phase is not closed until the green run exists
+2. permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`, once there are
+   endpoints that need them. The lists stay empty until then: an empty list is
+   accurate, not incomplete
+3. a transactional unit of work for the flag toggle and its audit write. Today
+   they are two awaited statements, so a crash between them could leave a flag
+   changed with no record of who changed it (tracked in `PROJECT_STATE.md`
+   "CURRENT RISKS")
 
 ---
 

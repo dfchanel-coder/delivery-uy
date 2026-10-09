@@ -55,9 +55,16 @@ Response:
 {
   "data": [],
   "pagination": {
-    "nextCursor": null
+    "nextCursor": null,
+    "hasMore": false
   }
 }
+
+`hasMore` answers "is there another page?" without implying the client already
+holds `nextCursor`; `nextCursor` is `null` exactly when `hasMore` is `false`. The
+cursor is opaque and is passed back verbatim as `cursor`; a cursor the server did
+not issue is `400 VALIDATION_FAILED` rather than a silent restart from the first
+page.
 
 ---
 
@@ -179,6 +186,30 @@ would also become the account enumerator the identical answer exists to prevent.
 session precisely because it exists for the case where the old password may be
 known to someone else, so a client must send the person back to sign in rather
 than treat the call as a way in.
+
+## Admin surface as of PHASE 04
+
+`AdminModule` is the first set of routes that are **not** public and require a
+permission rather than mere authentication. Each one declares exactly one
+`@Permissions(...)`, resolved from the matrix in `packages/auth`:
+
+| Route | Permission | Roles that hold it |
+| ----- | ---------- | ------------------ |
+| `GET /api/v1/admin/panel` | `admin:panel:read` | `ADMIN`, `SUPER_ADMIN`, `SUPPORT`, `FINANCE` |
+| `GET /api/v1/admin/feature-flags` | `admin:panel:read` | same as panel |
+| `GET /api/v1/admin/audit-logs` | `admin:audit:read` | `SUPER_ADMIN` |
+| `GET /api/v1/admin/risk-events` | `admin:risk-events:read` | `ADMIN`, `SUPER_ADMIN` |
+| `PATCH /api/v1/admin/feature-flags/:key` | `admin:feature-flags:write` | `SUPER_ADMIN` |
+
+`GET /admin/audit-logs` and `GET /admin/risk-events` are paginated; the cursor is
+opaque and invalid input answers `400 VALIDATION_FAILED`. `PATCH` answers `404
+NOT_FOUND` for a key that does not exist: a toggle never creates a flag, so a
+typo cannot define platform behaviour.
+
+The write endpoint writes an `audit_logs` row naming the actor, the role the
+token carried, both sides of the change and the request correlation id. No
+authorization decision is ever taken from the request body or query string
+(SECURITY.md "Authorization").
 
 ---
 

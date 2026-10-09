@@ -1,9 +1,9 @@
 # DeliveryUY Project State
 
-LAST_UPDATED: 2026-10-04
+LAST_UPDATED: 2026-10-08
 
 CURRENT_PHASE: PHASE 04
-CURRENT_MODULE: PHASE 04 - build AdminModule endpoints that exercise the proven RBAC guards, then seed SUPER_ADMIN, SUPPORT and FINANCE identities
+CURRENT_MODULE: PHASE 04 - the admin surface (`AdminModule` + `AuditModule` + `PlatformModule`) that exercises the proven RBAC matrix end to end, plus `SUPER_ADMIN`, `SUPPORT` and `FINANCE` in the development seed
 
 ---
 
@@ -182,7 +182,7 @@ integration tests (0 skipped). PHASE 02 is complete.
   (country, city, two zones, platform categories, global commission rule,
   feature flags, operational settings) plus one account per role family, which
   arrived in PHASE 03. Idempotent, refusing to run in production, and requiring
-  the eight `SEED_*` credentials instead of carrying a default password
+  the fourteen `SEED_*` credentials instead of carrying a default password
 - CI `integration` job runs `prisma migrate deploy`, `prisma migrate status`,
   the seed twice (idempotency, compared through snapshots) and the integration
   suite against pinned PostgreSQL/Redis. Run #3 passed migration, seed, all
@@ -280,7 +280,7 @@ run #2 is fixed by the atomic counter update.
 Development seed:
 
 - `prisma/seed.ts` now creates the development accounts with **real Argon2id
-  hashes** through `@deliveryuy/auth`. All eight `SEED_<ROLE>_EMAIL` /
+  hashes** through `@deliveryuy/auth`. All fourteen `SEED_<ROLE>_EMAIL` /
   `SEED_<ROLE>_PASSWORD` variables are **required** with no committed default,
   because an account created with a password that lives in this repository is one
   an attacker can guess and the seed would create it silently on any machine that
@@ -373,20 +373,50 @@ Run against a local sink outside the repository (not a committed fixture), with
 
 ## IN_PROGRESS
 
-- PHASE 04 - Users and Roles: the roles and the permission model are already in
-  place, so this slice spent itself proving them instead of adding them.
-  `JwtAuthGuard`, `RolesGuard` and `PermissionsGuard` are registered globally and
-  run in front of every request, yet no test had ever reached them: no route in the
-  repository carries `@Roles()` or `@Permissions()`, so until now the only thing
-  that had decided their behaviour was that nothing had reached them. 58 tests now
-  cover the three guards and the decorators (`rbac.guards.spec.ts`,
-  `jwt-auth.guard.spec.ts`, `endpoint-security.spec.ts`). Three assertions were
-  proven load-bearing by mutating the guard and watching the test fail, and the
-  guards were restored byte for byte afterwards. One real defect was found and
-  fixed: `principalFromRequest` accepted `null` as a principal. Still missing for
-  the phase: an endpoint that uses the mechanism (`AdminModule` does not exist),
-  `SUPER_ADMIN`/`SUPPORT`/`FINANCE` in the seed, and permission names for the
-  three non-privileged roles
+- PHASE 04 - Users and Roles. Two of the three open items are now closed and the
+  phase is waiting only on CI to confirm the new slice.
+
+  The roles and the permission model were already in place and the three global
+  guards were already proven in isolation (58 tests: `rbac.guards.spec.ts`,
+  `jwt-auth.guard.spec.ts`, `endpoint-security.spec.ts`). What was missing was a
+  route, which is the dangerous shape of untested code: the guards run in front of
+  every request, so a fault would have stayed invisible until the first protected
+  endpoint existed - at which point it is an authorization bypass, not a failing
+  test.
+
+  This slice adds that surface. `AdminModule` exposes five routes over the tables
+  that already exist, and each declares exactly one `@Permissions(...)` that no
+  route had ever required: `GET /admin/panel` and `GET /admin/feature-flags`
+  (`admin:panel:read`), `GET /admin/audit-logs` (`admin:audit:read`),
+  `GET /admin/risk-events` (`admin:risk-events:read`) and
+  `PATCH /admin/feature-flags/:key` (`admin:feature-flags:write`). `ADMIN` is not
+  unlimited: it reads the panel, flags and risk events but is refused the audit
+  trail and every toggle. `SUPPORT` and `FINANCE` read only the panel. Only
+  `SUPER_ADMIN` toggles a flag, and the toggle writes an `audit_logs` row naming
+  the actor, the role the token carried, both sides of the change, the IP address
+  and the correlation id.
+
+  Ownership follows `docs/MODULE_BOUNDARIES.md`: `AuditModule` owns `audit_logs`
+  and `risk_events` (reads only, plus the writer the admin command calls),
+  `PlatformModule` owns `feature_flags`, and `AdminModule` owns the HTTP surface
+  and a read model. The admin service calls the other modules' **services**, never
+  their repositories.
+
+  Testing: 744 unit/API tests across 34 files (57 new: the four service/controller
+  specs, `pagination.spec.ts`, `response-envelope.interceptor.spec.ts` and
+  `admin.e2e.spec.ts` with 20 tests driving the real guard chain with signed
+  tokens), plus four new integration specs for the Prisma adapters (11 files / 64
+  tests in the integration suite). `SUPER_ADMIN`, `SUPPORT` and `FINANCE` are now
+  seeded, which required six new `SEED_*` variables across `.env.example`,
+  `readme.md`, the CI workflow and `assert-seeded-users.mjs`.
+
+  Not yet done: permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`, which
+  stay empty until an endpoint needs one (AGENTS.md: an empty list is accurate,
+  not incomplete). CI has not yet run this slice; the phase closes when it does.
+  Known follow-up: the flag update and its audit write are two awaited statements
+  rather than one transaction, so a crash between them could leave a flag changed
+  with no record of who changed it. Closing it needs a transactional unit of work
+  shared by both modules; it is tracked under CURRENT RISKS.
 - Mobile: `login`, `register`, `logout`, `verify-email` and secure session
   persistence exist end to end and are proven on the emulator (ADR-021).
   `apps/merchant` and `apps/driver` still hold their sessions in memory only, and
@@ -657,11 +687,11 @@ a wrong password returning `401` with the error envelope.
 
 ## NEXT
 
-1. PHASE 04 - build the first surface that uses the mechanism now that the guards
-   are proven: `AdminModule` with endpoints behind the `admin:*` permissions that
-   today hang from nothing, plus `SUPER_ADMIN`, `SUPPORT` and `FINANCE` in the
-   seed so the matrix can be exercised against a real deployment and not only in
-   unit tests
+1. PHASE 04 - close it on CI: push the admin surface slice and confirm the green
+   run (unit/API, both stacks, the integration suite against pinned
+   PostgreSQL/Redis with no skips, and Dart). Only the permission names for
+   `CUSTOMER`, `MERCHANT` and `DRIVER` remain once an endpoint needs one; they are
+   intentionally empty today
 2. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the
    existing `TokenStore` port. Deliberately deferred: both apps are placeholders,
    so the file would be written against nothing and would only look finished
@@ -692,6 +722,12 @@ a wrong password returning `401` with the error envelope.
 - Docker unavailable in the current environment, so local compose execution is not
   possible. GitHub Actions run #3 booted both stacks and passed all checks; local
   container parity is an environment limitation, not an open project criterion.
+- The feature-flag toggle and its `audit_logs` write are two awaited statements,
+  not one transaction. A crash between them can leave a flag changed with no
+  record of who changed it. The audit write is awaited, so a failed write fails
+  the request, but it cannot roll back a flag that was already updated. Closing
+  this needs a transactional unit of work shared by `admin`, `audit` and
+  `platform`
 - `@nestjs/cli` pulls `@swc/core` as an optional peer; it is explicitly denied in
   `pnpm-workspace.yaml` because the project compiles with `tsc -b` (ADR-017)
 - `@node-rs/argon2` needs a prebuilt binary for the target platform. None is
