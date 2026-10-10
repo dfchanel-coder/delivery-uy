@@ -3,7 +3,7 @@
 LAST_UPDATED: 2026-10-09
 
 CURRENT_PHASE: PHASE 05
-CURRENT_MODULE: PHASE 05 - Merchant (not started). Registration, business profile, RUT fields, addresses, geographic location, approval flow, opening hours, merchant staff and admin review. PHASE 04 is complete; see ROADMAP.MD PHASE 05 and docs/REQUIREMENTS.md for the entry point.
+CURRENT_MODULE: PHASE 05 - Merchant, slice 1 (onboarding, business profile and admin review) is complete and its tests pass; the phase is not yet closed. Remaining slices: opening hours (`MerchantSchedule`/`MerchantClosure`), merchant staff (`MerchantMember`), and document upload. PHASE 04 is complete; see ROADMAP.MD PHASE 05 and docs/REQUIREMENTS.md for the entry point.
 
 ---
 
@@ -433,14 +433,71 @@ Prisma adapters. `SUPER_ADMIN`, `SUPPORT` and `FINANCE` are seeded, which added
 six `SEED_*` variables across `.env.example`, `readme.md`, the CI workflow and
 `assert-seeded-users.mjs`.
 
-Not yet done: permission names for `CUSTOMER`, `MERCHANT` and `DRIVER`, which
-stay empty until an endpoint needs one (AGENTS.md: an empty list is accurate,
-not incomplete).
+Not yet done: permission names for `CUSTOMER` and `DRIVER`, which stay empty
+until an endpoint needs one (AGENTS.md: an empty list is accurate, not
+incomplete). `MERCHANT` is no longer empty as of PHASE 05.
+
+---
+
+### PHASE 05 - Merchant (slice 1: onboarding, business profile and review)
+
+Registration, business profile, RUT fields, geographic location and the admin
+review are implemented and tested. Opening hours, merchant staff and document
+upload are the remaining slices and are not claimed.
+
+**RBAC.** `packages/auth` gained `merchant:profile:read` and
+`merchant:profile:manage`, both held by `MERCHANT`; `admin:merchants:review`
+already existed and is held by `ADMIN`, `SUPER_ADMIN` and `SUPPORT`.
+`rbac.spec.ts` was updated, so the `MERCHANT` permission list is no longer the
+empty set it was in PHASE 04.
+
+**Onboarding grants `MERCHANT` (ADR-025).** This is the one deliberate exception
+to "self-registration cannot escalate". `POST /auth/register` and the
+configuration refusal of `REGISTER_DEFAULT_ROLE=MERCHANT` are unchanged; the
+safety argument is that the role grants only profile read/manage, the business is
+created `PENDING_REVIEW`, and only an `admin:merchants:review` holder moves it to
+`ACTIVE`. The role, the business, the `OWNER` membership and the
+`merchant.registered` audit entry are written in one transaction.
+
+**New modules.** `GeoModule` (`countries`, `cities`, `delivery_zones`) serves
+`GET /geo/cities` and resolves a city for other modules, so no city rule is
+hardcoded (AGENTS.md sections 45, 46). `MerchantsModule` owns
+`merchants`/`merchant_members`/`merchant_schedules`/`merchant_closures` and
+serves `POST /merchants`, `GET /merchants/mine`, `GET /merchants/:id`,
+`PATCH /merchants/:id`, plus the privileged `admin/merchants` review routes in
+its own `MerchantReviewController` (the `users` module precedent: a resource
+module owns its admin routes). `auditActorFromRequest` was extracted to
+`modules/audit` and is now shared with `AdminController`.
+
+**Domain rules.** RUT is validated with its check digit (modulo 11, weights
+`4,3,2,9,8,7,6,5,4,3,2`), stored normalized and unique, and immutable after
+creation. The review state machine is explicit and central
+(`PENDING_REVIEW -> ACTIVE|REJECTED`, `REJECTED -> ACTIVE`,
+`ACTIVE -> SUSPENDED|DISABLED`, `SUSPENDED -> ACTIVE|DISABLED`, `DISABLED`
+terminal). Coordinates are accepted as JSON numbers and stored as
+`NUMERIC(9, 6)`. A non-member is answered `MERCHANT_NOT_FOUND` (404), never
+`FORBIDDEN`, so an id cannot be probed.
+
+**Testing.** 51 new unit/API tests across five files: `rut.spec.ts` (6),
+`merchant-status.spec.ts` (6), `merchants.service.spec.ts` (18),
+`merchant-review.controller.spec.ts` (4, the guard-metadata regression the
+`admin` module has) and `merchants.e2e.spec.ts` (17, real HTTP with in-memory
+doubles and signed tokens). The Prisma adapter has
+`prisma-merchant.repository.integration.spec.ts` (CI-only, against a migrated
+PostgreSQL), covering the real `rut_normalized` unique constraint, soft-delete
+invisibility, the lossless `NUMERIC(9, 6)` round-trip and the transaction-scoped
+`createWithOwner`. Full local suite: 814 tests, 0 failures; `pnpm run lint`,
+`pnpm run format:check`, `pnpm run build:admin` and `pnpm run typecheck` all pass.
 
 ---
 
 ## IN_PROGRESS
 
+- PHASE 05 - Merchant, slices 2 and 3. Opening hours (`MerchantSchedule`,
+  `MerchantClosure`) and merchant staff (`MerchantMember`: invite, roles, removal)
+  are not yet implemented; the tables exist from PHASE 02 and the module owns
+  them. Document upload depends on `StorageProvider` (AGENTS.md section 24) and is
+  deferred until that port has a production adapter
 - Mobile: `login`, `register`, `logout`, `verify-email` and secure session
   persistence exist end to end and are proven on the emulator (ADR-021).
   `apps/merchant` and `apps/driver` still hold their sessions in memory only, and
@@ -711,14 +768,12 @@ a wrong password returning `401` with the error envelope.
 
 ## NEXT
 
-1. PHASE 05 - Merchant. Build registration, business profile, RUT fields,
-   addresses, geographic location, approval flow, opening hours and merchant
-   staff/admin review, following the module boundaries and the migration process in
-   AGENTS.md (sections 10, 25, 66, 80). The prerequisite slices are complete: CI
-   run #9 (`2b8d515`, 2026-10-09) closed PHASE 04 with all four jobs green,
-   including the integration job against pinned `postgres:16` + `redis:7`. The
-   permission names for `CUSTOMER`, `MERCHANT` and `DRIVER` stay empty until an
-   endpoint needs one
+1. PHASE 05 - Merchant. Slice 1 (registration, business profile, RUT, geographic
+   location and admin review) is complete; `ADR-025` records the onboarding role
+   grant. Continue with opening hours (`MerchantSchedule`/`MerchantClosure`) and
+   merchant staff (`MerchantMember`), then document upload once
+   `StorageProvider` has a production adapter. Follow the module boundaries and
+   the migration process in AGENTS.md (sections 10, 25, 66, 80)
 2. Mobile - give `apps/merchant` and `apps/driver` a `SecureTokenStore` over the
    existing `TokenStore` port. Deliberately deferred: both apps are placeholders,
    so the file would be written against nothing and would only look finished

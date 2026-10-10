@@ -576,6 +576,10 @@ Remaining before this phase can close:
 
 ## PHASE 05 - Merchant
 
+**IN PROGRESS** - slice 1 (registration, business profile, RUT, geographic
+location and admin review) is implemented and tested; opening hours, merchant
+staff and document upload remain.
+
 Implement:
 
 - merchant registration
@@ -587,6 +591,28 @@ Implement:
 - opening hours
 - merchant users/staff
 - admin review
+
+### Progress
+
+Slice 1 complete:
+
+- `GeoModule` serves `GET /geo/cities` and resolves cities for other modules, so
+  no city-specific rule is hardcoded
+- `MerchantsModule` serves `POST /merchants`, `GET /merchants/mine`,
+  `GET /merchants/:id` and `PATCH /merchants/:id`, plus the
+  `admin/merchants` review routes (`GET`, `GET /:id`, `POST /:id/approve`,
+  `POST /:id/reject`) behind `admin:merchants:review`
+- onboarding grants `MERCHANT` as the deliberate, audited exception in `ADR-025`;
+  the business starts `PENDING_REVIEW` and only an administrator activates it
+- RUT check digit, normalized/unique/immutable storage, an explicit review state
+  machine, and membership-based authorization that answers `MERCHANT_NOT_FOUND`
+  rather than `FORBIDDEN` for a non-member
+- 51 unit/API tests plus a Prisma adapter integration spec (CI-only); the full
+  local suite is 814 tests with 0 failures
+
+Remaining slices: opening hours (`MerchantSchedule`/`MerchantClosure`), merchant
+staff (`MerchantMember`), and document upload (needs a production
+`StorageProvider`).
 
 ---
 

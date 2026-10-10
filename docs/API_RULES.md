@@ -231,6 +231,50 @@ VALIDATION_FAILED` for a body the DTO does not accept: the DTOs are
 service refuses to suspend the last active `SUPER_ADMIN`, or to remove that role
 from it, so the platform cannot be locked out of its own top role.
 
+## Merchant and geo surface as of PHASE 05
+
+`GeoModule` exposes the city list a client needs before it can register a
+business; `MerchantsModule` owns the merchant-facing routes and the
+administrative review, gated by `admin:merchants:review` (the same pattern as
+`UsersModule`: the resource module owns its admin routes).
+
+| Route | Permission | Notes |
+| ----- | ---------- | ----- |
+| `GET /api/v1/geo/cities` | none (authenticated) | enabled cities, alphabetical |
+| `POST /api/v1/merchants` | none (authenticated) | rate-limited per user; `201 PENDING_REVIEW` |
+| `GET /api/v1/merchants/mine` | `merchant:profile:read` | the caller's businesses, newest first |
+| `GET /api/v1/merchants/:id` | `merchant:profile:read` | membership required |
+| `PATCH /api/v1/merchants/:id` | `merchant:profile:manage` | `OWNER`/`MANAGER` only |
+| `GET /api/v1/admin/merchants` | `admin:merchants:review` | `page`/`limit`, optional `status` |
+| `GET /api/v1/admin/merchants/:id` | `admin:merchants:review` | one registration |
+| `POST /api/v1/admin/merchants/:id/approve` | `admin:merchants:review` | `200`, business becomes `ACTIVE` |
+| `POST /api/v1/admin/merchants/:id/reject` | `admin:merchants:review` | `200`, body `{ "reason": "..." }` |
+
+`POST /merchants` requires a token but declares no permission: it is how an
+account becomes a merchant, so requiring `MERCHANT` would be circular. The grant
+is the deliberate, audited exception documented in `SECURITY.md` and `ADR-025`.
+The RUT is validated with its check digit, stored normalized (digits only,
+`rut_normalized` unique) and immutable after creation; coordinates arrive as JSON
+numbers and are stored and returned as fixed six-decimal strings
+(`NUMERIC(9, 6)`).
+
+Membership is the tenant check. A caller with no membership in `:id` receives
+`404 MERCHANT_NOT_FOUND` - never `403` - so an id cannot be probed to learn
+whether it exists. The merchant error codes are:
+
+| Situation | Status | `code` |
+| --------- | ------ | ------ |
+| Unknown business, or caller is not a member | `404` | `MERCHANT_NOT_FOUND` |
+| Transition the state machine does not allow | `409` | `MERCHANT_INVALID_STATE` |
+| RUT already registered | `409` | `MERCHANT_RUT_CONFLICT` |
+| RUT check digit fails, or unknown/disabled city | `400` | `VALIDATION_FAILED` |
+| Register from an inactive account | `403` | `FORBIDDEN` |
+| Update by a member without `OWNER`/`MANAGER` | `403` | `FORBIDDEN` |
+
+`GET /admin/merchants` returns the offset envelope (`{ data, meta }` nested under
+the response `data`), unlike the cursor-paginated `admin` module routes: the
+merchant review queue is a bounded administrative list addressed by page.
+
 ---
 
 # Documentation

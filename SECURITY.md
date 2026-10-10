@@ -449,6 +449,23 @@ Rules:
 request field for a role, and the default comes from configuration that accepts
 no value other than `CUSTOMER`.
 
+### The one exception: merchant onboarding (`ADR-025`, PHASE 05)
+
+Registering a business with `POST /merchants` grants the caller `MERCHANT`. This
+is the single deliberate exception to the rule above, and it is safe because the
+role grants only `merchant:profile:read` and `merchant:profile:manage`:
+
+- the business is created `PENDING_REVIEW` and cannot receive orders; only an
+  `admin:merchants:review` holder can approve it to `ACTIVE`
+  (`docs/BUSINESS_RULES.md`);
+- the grant, the business, the `OWNER` membership and the `merchant.registered`
+  audit entry are written in one transaction, so a failure grants nothing;
+- authorization for a specific business is membership-based, not role-based: a
+  `MERCHANT` with no membership row gets `MERCHANT_NOT_FOUND`, so an id cannot be
+  probed (never `FORBIDDEN`, which would distinguish "exists" from "not mine");
+- `POST /auth/register` and the configuration refusal of
+  `REGISTER_DEFAULT_ROLE=MERCHANT` are untouched.
+
 ---
 
 # Client Credential Storage
@@ -666,6 +683,49 @@ the toggles; only `SUPER_ADMIN` toggles a flag, and the toggle writes an
 `@Permissions(...)` would also fail `admin.controller.spec.ts`, which reads the
 metadata off every controller method.
 
-Still not exercised: the `CUSTOMER`, `MERCHANT` and `DRIVER` permission lists.
-They are empty because no endpoint needs one yet; `rbac.guards.spec.ts` still
-covers what the guards do for those roles.
+Still not exercised: the `CUSTOMER` and `DRIVER` permission lists. Both are empty
+because no endpoint needs one yet; `rbac.guards.spec.ts` still covers what the
+guards do for those roles. The `MERCHANT` list is exercised from PHASE 05 (see
+"PHASE 05 status" below).
+
+## PHASE 05 status
+
+The merchant surface adds the first routes a *non-administrator* reaches with a
+permission of their own (`merchant:profile:read` / `merchant:profile:manage`), and
+the first resource routes that are scoped by **membership** rather than by role.
+
+- the RUT check digit (`rut.spec.ts`, 6 tests) - the published modulo-11 weights
+  `4,3,2,9,8,7,6,5,4,3,2`, remainder `0` gives check digit `0` and remainder `1`
+  gives `6`, every digit string of the wrong length or with a mismatch refused,
+  and the stored value never derived from anything but the input digits;
+- the review state machine (`merchant-status.spec.ts`, 6 tests) - the allowed and
+  forbidden transitions, including that `DISABLED` is terminal;
+- `MerchantsService` (18 tests) - registration writes business + `OWNER`
+  membership + role + audit in one transaction; an invalid RUT, an unknown or
+  disabled city and an inactive account each write nothing; a duplicate RUT is
+  `MERCHANT_RUT_CONFLICT` and grants no role; `listMine` is membership-scoped;
+  `getForMember` and `updateProfile` answer `MERCHANT_NOT_FOUND` to a non-member
+  (IDOR; never `FORBIDDEN`); a non-owner/non-manager member is `FORBIDDEN`; the
+  legal name of an `ACTIVE` business cannot be rewritten; `approve`/`reject` honor
+  the state machine and write their audit entries;
+- `MerchantsController` and `MerchantReviewController` over real HTTP
+  (`merchants.e2e.spec.ts`, 17 tests) - a missing token is `401`; a `CUSTOMER`
+  token is `403` on every `merchant:*` route; a `MERCHANT` token is `403` on the
+  `admin:merchants:*` routes; registration returns `201 PENDING_REVIEW`; the admin
+  page carries `meta.totalCount`; approve/reject return `200` with the new status
+  and a missing rejection reason is `400 VALIDATION_FAILED`;
+- the review controller's guard metadata (`merchant-review.controller.spec.ts`, 4
+  tests) - no route is `@Public()`, each names exactly `admin:merchants:review`,
+  and none uses `@Roles()`; the same regression `admin.controller.spec.ts` holds
+  over the `admin` module now also holds over the privileged routes that live in
+  `merchants`;
+- the merchant permissions were added to `packages/auth` and asserted in
+  `rbac.spec.ts`.
+
+Covered by the integration suite (`*.integration.spec.ts`, run in CI against a
+migrated PostgreSQL): the unique constraint on `rut_normalized` is what rejects a
+concurrent duplicate - not just the service pre-check - a duplicate is translated
+to `MerchantRutConflictError` rather than a `500`, soft-deleted rows are invisible
+to `findById`/`findByRutNormalized`, `createWithOwner` writes business and
+membership on the caller's transaction client, the `NUMERIC(9, 6)` coordinate
+round-trip is lossless, and `listForAdmin` filters and counts.

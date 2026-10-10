@@ -32,6 +32,7 @@ accepted decision requires a new ADR that explicitly supersedes it
 | [022](ADR-022-notification-delivery.md) | Delivering Password Recovery and Address Verification | ACCEPTED |
 | [023](ADR-023-integration-spec-isolation.md) | Integration Spec Isolation         | ACCEPTED                        |
 | [024](ADR-024-declared-prerequisites.md) | Declared Prerequisites Over Consequential Ordering | ACCEPTED |
+| [025](ADR-025-merchant-onboarding.md) | Merchant Onboarding Grants the MERCHANT Role | ACCEPTED |
 
 ## Naming
 
