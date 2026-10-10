@@ -1,4 +1,4 @@
-# DeliveryUY Development Roadmap
+﻿# DeliveryUY Development Roadmap
 
 Status legend:
 
@@ -341,7 +341,7 @@ integration criterion was missing:
   `PasswordRecoveryResult`. The `status` literal is checked rather than stored, so
   a renamed field raises `FormatException` instead of being read as success
 - `apps/customer`: `PasswordRecoveryController` and the three-step screen behind
-  "¿Olvidaste tu contraseña?" on the sign-in form. Recovery is deliberately **not**
+  "Â¿Olvidaste tu contraseÃ±a?" on the sign-in form. Recovery is deliberately **not**
   an `AuthStatus`: the API returns no credentials after a reset, so a controller
   that treated it as a way in would describe something the API does not do. A
   refusal keeps the person on the step they started from, the token is cleared
