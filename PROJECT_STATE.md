@@ -1,4 +1,4 @@
-# DeliveryUY Project State
+﻿# DeliveryUY Project State
 
 LAST_UPDATED: 2026-10-09
 
@@ -100,7 +100,7 @@ Applications (real, buildable, tested):
   enabled in the **debug** manifest only, so a debug build can reach
   `http://10.0.2.2:3000`; the release manifest keeps the Android 9+ block
   - Password recovery (closed in this slice): `PasswordRecoveryController` and
-    `PasswordRecoveryPage`, reached from "¿Olvidaste tu contraseña?" on the
+    `PasswordRecoveryPage`, reached from "Â¿Olvidaste tu contraseÃ±a?" on the
     **sign-in form only** - somebody with no account has nothing to recover, and
     on the sign-up form the link would send them after a message about an address
     that was never registered. Recovery is deliberately not an `AuthStatus`: the
@@ -120,7 +120,7 @@ Applications (real, buildable, tested):
     depends on the provider the deployment configures, so the copy is
     conditional ("si recibiste el mensaje"). When a deployment also requires
     approval, the answer `{ verified: true, canSignIn: false }` moves the screen
-    to "Tu correo quedó verificado" with the approval stated, instead of
+    to "Tu correo quedÃ³ verificado" with the approval stated, instead of
     offering a sign-in the API would answer `403 EMAIL_NOT_VERIFIED`
   - Session persistence (ADR-021): only the refresh token is written, through the
     `TokenStore` port in `packages/dart/core`, implemented in the application by
@@ -320,57 +320,6 @@ Testing:
 Documentation updated: `ADR-020`, `ADR-022`, `SECURITY.md`, `docs/API_RULES.md`,
 `docs/TESTING.MD`, `ROADMAP.MD`, `readme.md`.
 
-### Verified by running the code
-
-- `GET /api/v1/health/live` -> `200 {"data":{"status":"ok",...}}` with no
-  infrastructure running
-- `GET /api/v1/health/ready` -> `503` with
-  `{"error":{"code":"SERVICE_UNAVAILABLE",...,"correlationId":"..."}}` while
-  PostgreSQL/Redis are unreachable, and `200 {"status":"ready",...}` with both
-  reporting `up` and their latencies while they are running
-- `GET /api/v1/<unknown>` -> `404` structured `NOT_FOUND` envelope, no stack
-  trace
-- `apps/admin` -> `200` on `/` and `/health`, rendering the API liveness and the
-  degraded readiness card with the backend correlation id
-- `apps/customer` on an Android emulator -> real sign-in and real self-registration
-  against `http://10.0.2.2:3000`: `POST /auth/register` answered `201` with
-  `verificationRequired: false`, roles `['CUSTOMER']` and no escalation, and the
-  new account's `GET /auth/me` returned `200` with `authorization: [redacted]`.
-  Logged from the device as `Dart/3.13 (dart:io)`
-- `apps/customer` session persistence on the same emulator, which is the part
-  unit tests cannot reach because it is a platform channel:
-  - `POST /auth/login` -> `200`, then `am force-stop` and a cold start opened
-    straight into "Mi sesión" with the account, after exactly one
-    `POST /auth/refresh` -> `200`. The sign-in form was never rendered, and the
-    new `accessTokenExpiresAt` proved the rotated token was what got persisted
-  - `POST /auth/logout` -> `204`, then a cold start showed the form and issued
-    **zero** requests. Had the keystore entry survived sign-out, the launch would
-    have logged a `/auth/refresh` attempt
-
-### Verified against a real SMTP conversation
-
-Run against a local sink outside the repository (not a committed fixture), with
-`NOTIFICATION_PROVIDER=smtp`, `SMTP_REQUIRE_TLS=false` and
-`REQUIRE_EMAIL_VERIFICATION=true`:
-
-- the boot-time provider `verify()` reporting the host reachable
-- `POST /auth/register` -> `201`, `status: PENDING_VERIFICATION`, `tokens: null`,
-  `verificationRequired: true`, and the verification message arriving as MIME with
-  the right sender, subject, recipients and a `Message-ID` that is a hash rather
-  than the token
-- `POST /auth/login` before proving the address -> `403 EMAIL_NOT_VERIFIED`
-- `POST /auth/verify-email` with the code from the message -> `200
-  {"verified":true,"canSignIn":true}`, then `POST /auth/login` -> `200`, then the
-  same code again -> `401 TOKEN_INVALID`
-- `POST /auth/password/forgot` -> `202`, the recovery message arriving as MIME
-  with its own hash and a `pr_` token, `POST /auth/password/reset` -> `200`,
-  `POST /auth/login` with the new password -> `200`, and the same reset code again
-  -> `401`
-- no plaintext code in any log line: the notifiers log the account id and the
-  provider name only, and `Message-ID` carries the digest
-
----
-
 ### PHASE 04 - Users and Roles
 
 **COMPLETE:** CI run #9 (`2b8d515`, 2026-10-09) passed all four jobs: verify
@@ -505,7 +454,7 @@ invisibility, the lossless `NUMERIC(9, 6)` round-trip and the transaction-scoped
   products do not exist yet, so there is nothing for persistence to serve there
 - Password recovery is now reachable in the customer application. `AuthApi` has
   `requestPasswordRecovery` / `completePasswordRecovery`, and
-  `apps/customer` has the three-step flow behind a "¿Olvidaste tu contraseña?"
+  `apps/customer` has the three-step flow behind a "Â¿Olvidaste tu contraseÃ±a?"
   link on the sign-in form. The token is not kept in memory by the controller,
   and no screen claims a message was sent
 
@@ -513,7 +462,7 @@ invisibility, the lossless `NUMERIC(9, 6)` round-trip and the transaction-scoped
 
 ## BLOCKED
 
-- **No blocker remains for PHASE 01–03.** CI run #3 passed all four jobs, including
+- **No blocker remains for PHASE 01â€“03.** CI run #3 passed all four jobs, including
   both compose stacks, the pinned PostgreSQL/Redis integration suite and API health
   probes. This Windows host still has no container runtime, so the compose proof is
   from GitHub Actions, not a local boot. PHASE 04 work continues under `IN_PROGRESS`.
@@ -674,7 +623,7 @@ against the local endpoints:
    PHASE 01 exit criterion 5.**
 
 The API was also exercised by hand over HTTP: `POST /auth/login` (`200`, JWT
-access token, opaque `rt_…` refresh token, `expiresIn 899`, roles `['CUSTOMER']`),
+access token, opaque `rt_â€¦` refresh token, `expiresIn 899`, roles `['CUSTOMER']`),
 `POST /auth/register`, `POST /auth/refresh` (rotated token), `GET /auth/me`, and
 a wrong password returning `401` with the error envelope.
 
@@ -760,7 +709,7 @@ a wrong password returning `401` with the error envelope.
 - **Cold local health probe budget.** A local first PostgreSQL connection took
   about 2.16 s against the 2 s default, so this host's `.env` uses 5 s. The
   default was not raised globally. CI run #3 passed readiness against both
-  PostgreSQL 16.15 and Redis 7.4.11 (40–45 ms on the runner); the script reports
+  PostgreSQL 16.15 and Redis 7.4.11 (40â€“45 ms on the runner); the script reports
   the configured timeout so a local budget issue is distinguishable from a
   dependency failure.
 

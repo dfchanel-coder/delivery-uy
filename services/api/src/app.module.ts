@@ -8,6 +8,7 @@ import { RateLimitGuard } from './common/rate-limit/rate-limit.guard.js';
 import { RateLimitModule } from './common/rate-limit/rate-limit.module.js';
 import { PermissionsGuard, RolesGuard } from './common/security/rbac.guards.js';
 import { SecurityModule } from './common/security/security.module.js';
+import { StorageModule } from './common/storage/storage.module.js';
 import { JwtAuthGuard } from './common/security/jwt-auth.guard.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { HealthModule } from './modules/health/health.module.js';
@@ -74,6 +75,7 @@ import { UsersModule } from './modules/users/users.module.js';
     SecurityModule,
     DatabaseModule,
     RateLimitModule,
+    StorageModule,
     HealthModule,
     AuthModule,
     AuditModule,

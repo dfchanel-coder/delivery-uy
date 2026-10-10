@@ -371,6 +371,9 @@ importers:
       '@deliveryuy/notifications':
         specifier: workspace:*
         version: link:../../packages/notifications
+      '@deliveryuy/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@deliveryuy/types':
         specifier: workspace:*
         version: link:../../packages/types

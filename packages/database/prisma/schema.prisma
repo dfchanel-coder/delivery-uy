@@ -504,6 +504,7 @@ model Merchant {
   members                MerchantMember[]
   schedules              MerchantSchedule[]
   closures               MerchantClosure[]
+  documents              MerchantDocument[]
   products               Product[]
   categories             Category[]
   orders                 Order[]
@@ -1167,4 +1168,15 @@ model WebhookOutbound {
 
   @@index([status, nextAttemptAt])
   @@map("webhook_outbound")
+}
+model MerchantDocument {
+  id               String             @id @default(uuid()) @db.Uuid
+  merchantId       String             @map("merchant_id") @db.Uuid
+  type             String             @db.VarChar(50)
+  storageKey       String             @map("storage_key") @db.VarChar(400)
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  merchant         Merchant           @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId, type])
+  @@map("merchant_documents")
 }
