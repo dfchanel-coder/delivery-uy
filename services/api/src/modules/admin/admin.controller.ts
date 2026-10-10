@@ -15,12 +15,10 @@ import type {
   AdminRiskEvent,
 } from '@deliveryuy/types';
 import type { Request } from 'express';
-import type { AuditActor } from '../audit/audit.ports.js';
+import { auditActorFromRequest } from '../audit/audit-actor.js';
 import type { PagedResult } from '../../common/pagination/paged-result.js';
-import { REQUEST_ID_HEADER } from '../../common/middleware/request-id.middleware.js';
 import {
   Permissions,
-  principalFromRequest,
   RateLimit,
   type RequestWithPrincipal,
 } from '../../common/security/endpoint-security.js';
@@ -94,29 +92,10 @@ export class AdminController {
     @Body() body: SetFeatureFlagDto,
     @Req() request: Request & RequestWithPrincipal,
   ): Promise<AdminFeatureFlag> {
-    return this.admin.setFeatureFlagEnabled(actorOf(request), params.key, body.enabled);
+    return this.admin.setFeatureFlagEnabled(
+      auditActorFromRequest(request),
+      params.key,
+      body.enabled,
+    );
   }
-}
-
-/**
- * Builds the audit actor from the verified request.
- *
- * The role is read from the token, not from a header or the body, so a caller
- * cannot claim a role it does not hold. A user with several roles records the
- * first; the full role list lives on the account, which is what an investigation
- * consults to know the others (AGENTS.md section 29).
- */
-function actorOf(request: Request & RequestWithPrincipal): AuditActor {
-  const principal = principalFromRequest(request);
-  const userAgent = request.headers['user-agent'];
-  const correlationId = request.headers[REQUEST_ID_HEADER];
-
-  return {
-    userId: principal.userId,
-    role: principal.roles[0] ?? null,
-    ipAddress: typeof request.ip === 'string' && request.ip.length > 0 ? request.ip : null,
-    userAgent: typeof userAgent === 'string' ? userAgent.slice(0, 512) : null,
-    // The middleware has already replaced an unsafe client value with a UUID.
-    correlationId: typeof correlationId === 'string' ? correlationId : null,
-  };
 }

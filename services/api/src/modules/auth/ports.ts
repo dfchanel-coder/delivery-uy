@@ -7,6 +7,8 @@
  * silently bypass them (AGENTS.md sections 80, 82).
  */
 
+import type { TransactionContext } from '../../common/database/unit-of-work.js';
+
 export type UserStatus = 'PENDING_VERIFICATION' | 'ACTIVE' | 'SUSPENDED' | 'DISABLED';
 
 export interface AuthUserRecord {
@@ -60,6 +62,21 @@ export interface UserRepository {
    * verification endpoint) approves it; without it, the account becomes usable.
    */
   markEmailVerified(input: { userId: string; now: Date; activate: boolean }): Promise<void>;
+  /**
+   * Adds one role to an account, idempotently.
+   *
+   * `user_roles` belongs to `auth`, so a module that legitimately needs to grant
+   * a role (merchant onboarding grants `MERCHANT`) goes through this port rather
+   * than touching the table. Adding a role an account already has is a no-op, so
+   * a retried onboarding cannot fail on the unique `(user_id, role)` constraint.
+   *
+   * Pass `tx` to join the caller's transaction, so the role grant and the record
+   * that justified it commit or roll back together (AGENTS.md section 83).
+   */
+  assignRole(
+    input: { userId: string; role: string; now: Date },
+    tx?: TransactionContext,
+  ): Promise<void>;
 }
 
 export interface NewSession {

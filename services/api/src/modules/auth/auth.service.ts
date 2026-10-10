@@ -24,6 +24,7 @@ import type {
 } from '@deliveryuy/types';
 import { AppConfigService } from '../../common/config/app-config.service.js';
 import { ApiException } from '../../common/errors/api-exception.js';
+import type { TransactionContext } from '../../common/database/unit-of-work.js';
 import { AccessTokenService } from '../../common/security/security.module.js';
 import {
   CLOCK,
@@ -621,6 +622,23 @@ export class AuthService {
       now: this.clock.now(),
       activate: !this.config.auth.accountApprovalRequired,
     });
+  }
+
+  /**
+   * Grants the `MERCHANT` role as part of self-service onboarding.
+   *
+   * This is deliberately the only role this method can add, and it is called
+   * only by the merchant module during registration. `POST /auth/register` can
+   * still never mint a non-`CUSTOMER` role (SECURITY.md "Self-registration
+   * cannot escalate"): merchant onboarding is a separate, audited flow that
+   * creates a business record the account owns, and the role it grants unlocks
+   * only that business's own tools (AGENTS.md section 10).
+   *
+   * The caller is responsible for the account being usable; the merchant service
+   * checks the account status before calling this.
+   */
+  public async grantMerchantRole(userId: string, tx?: TransactionContext): Promise<void> {
+    await this.users.assignRole({ userId, role: 'MERCHANT', now: this.clock.now() }, tx);
   }
 
   // ------------------------------------------------------------------ shared

@@ -13,6 +13,8 @@ import { AuthModule } from './modules/auth/auth.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
+import { GeoModule } from './modules/geo/geo.module.js';
+import { MerchantsModule } from './modules/merchants/merchants.module.js';
 import { PlatformModule } from './modules/platform/platform.module.js';
 import { UsersModule } from './modules/users/users.module.js';
 
@@ -76,6 +78,8 @@ import { UsersModule } from './modules/users/users.module.js';
     AuthModule,
     AuditModule,
     PlatformModule,
+    GeoModule,
+    MerchantsModule,
     AdminModule,
     UsersModule,
   ],

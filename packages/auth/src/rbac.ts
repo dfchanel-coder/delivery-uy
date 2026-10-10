@@ -39,6 +39,11 @@ export const PERMISSIONS = [
   'admin:delivery:exception-complete',
   'admin:feature-flags:write',
   'admin:risk-events:read',
+  // Merchant self-service. These are the first non-admin permissions: they gate
+  // a merchant acting on its own business, never another merchant's (AGENTS.md
+  // sections 10, 32).
+  'merchant:profile:read',
+  'merchant:profile:manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -52,7 +57,7 @@ export type Permission = (typeof PERMISSIONS)[number];
  */
 export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = Object.freeze({
   CUSTOMER: [],
-  MERCHANT: [],
+  MERCHANT: ['merchant:profile:read', 'merchant:profile:manage'],
   DRIVER: [],
   ADMIN: [
     'admin:panel:read',

@@ -9,4 +9,11 @@
  * `prisma/schema.prisma` and to the `Role` union in `@deliveryuy/auth`.
  */
 
-export { AppRole, RiskSeverity, UserStatus, VerificationTokenType } from '@prisma/client';
+export {
+  AppRole,
+  MerchantMemberRole,
+  MerchantStatus,
+  RiskSeverity,
+  UserStatus,
+  VerificationTokenType,
+} from '@prisma/client';

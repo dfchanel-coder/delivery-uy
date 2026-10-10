@@ -7,7 +7,14 @@ export {
   type HealthCheckStatus,
 } from './client.js';
 
-export { AppRole, RiskSeverity, UserStatus, VerificationTokenType } from './enums.js';
+export {
+  AppRole,
+  MerchantMemberRole,
+  MerchantStatus,
+  RiskSeverity,
+  UserStatus,
+  VerificationTokenType,
+} from './enums.js';
 
 export {
   SOFT_DELETABLE_TABLES,

@@ -194,6 +194,25 @@ export async function resetAdminTables(): Promise<void> {
   if (database?.status === 'ready') await truncateAdminTables(database.value);
 }
 
+/**
+ * Clears the tables the merchant integration tests write.
+ *
+ * Kept separate from the other resets because the sets are disjoint: a merchant
+ * fixture must not depend on the auth or audit suites leaving `users` or
+ * `audit_logs` in a particular state. `CASCADE` also clears the tables that
+ * reference `merchants` (members, schedules, closures, catalog) so the next test
+ * starts from an empty storefront.
+ */
+export async function truncateMerchantTables(client: PrismaClient): Promise<void> {
+  await client.$executeRawUnsafe('TRUNCATE TABLE "merchants" RESTART IDENTITY CASCADE');
+}
+
+/** Truncates the merchant tables before each test, when reachable. */
+export async function resetMerchantTables(): Promise<void> {
+  if (database === null) await openDatabase();
+  if (database?.status === 'ready') await truncateMerchantTables(database.value);
+}
+
 // ---------------------------------------------------------------------------
 // Redis
 // ---------------------------------------------------------------------------

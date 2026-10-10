@@ -181,6 +181,13 @@ export class InMemoryUserRepository implements UserRepository {
     if (user !== undefined) user.status = status;
   }
 
+  public async assignRole(input: { userId: string; role: string; now: Date }): Promise<void> {
+    const user = this.users.get(input.userId);
+    if (user === undefined) return;
+
+    if (!user.roles.includes(input.role)) user.roles = [...user.roles, input.role];
+  }
+
   /** Test helper: seeds an account without going through registration. */
   public seed(
     overrides: Partial<StoredUser> & { email: string; passwordHash: string },

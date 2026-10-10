@@ -4,8 +4,17 @@ import { can, hasAnyRole, resolvePermissions, ROLE_PERMISSIONS } from './rbac.js
 describe('RBAC policy', () => {
   it('grants no admin permissions to self-service roles', () => {
     expect(resolvePermissions(['CUSTOMER']).size).toBe(0);
-    expect(resolvePermissions(['MERCHANT']).size).toBe(0);
     expect(resolvePermissions(['DRIVER']).size).toBe(0);
+
+    // MERCHANT holds its own profile permissions and nothing privileged: the
+    // first non-admin permissions exist so a merchant can act on its own
+    // business, never so it can reach the admin surface.
+    const merchantPermissions = [...resolvePermissions(['MERCHANT'])];
+    expect(merchantPermissions.length).toBeGreaterThan(0);
+    expect(merchantPermissions.every((permission) => permission.startsWith('merchant:'))).toBe(
+      true,
+    );
+    expect(can(['MERCHANT'], 'admin:panel:read')).toBe(false);
   });
 
   it('does not treat ADMIN as unlimited access (AGENTS.md section 70)', () => {

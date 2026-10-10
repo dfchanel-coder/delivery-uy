@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AppRole, Prisma, PrismaClient, UserStatus } from '@deliveryuy/database';
+import type { TransactionContext } from '../../../common/database/unit-of-work.js';
 import type { AuthUserRecord, UserRepository, UserStatus as AuthUserStatus } from '../ports.js';
 
 /** Shape returned by the hand-written lookup below. */
@@ -277,6 +278,33 @@ export class PrismaUserRepository implements UserRepository {
     await this.prisma.user.updateMany({
       where: { id: input.userId, status: UserStatus.PENDING_VERIFICATION },
       data: { status: UserStatus.ACTIVE, updatedAt: input.now },
+    });
+  }
+
+  /**
+   * Adds one role, ignoring a role the account already has.
+   *
+   * `createMany({ skipDuplicates: true })` maps to `INSERT ... ON CONFLICT DO
+   * NOTHING`, so two concurrent grants (a retried onboarding) cannot both lose
+   * and raise a unique violation.
+   */
+  public async assignRole(
+    input: { userId: string; role: string; now: Date },
+    tx?: TransactionContext,
+  ): Promise<void> {
+    const client = tx ?? this.prisma;
+
+    await client.userRole.createMany({
+      data: [{ userId: input.userId, role: input.role as AppRole }],
+      skipDuplicates: true,
+    });
+
+    // `user_roles` has no timestamp column, but the account's `updated_at` should
+    // still reflect that its access changed - an investigator reading the account
+    // must be able to tell when the role set last moved.
+    await client.user.update({
+      where: { id: input.userId },
+      data: { updatedAt: input.now },
     });
   }
 }
