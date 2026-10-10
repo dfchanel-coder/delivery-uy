@@ -1,4 +1,4 @@
-# DeliveryUY Database Architecture
+﻿# DeliveryUY Database Architecture
 
 Status: PHASE 02 - migration `0001_init` applied and verified against PostgreSQL
 16.14 locally and PostgreSQL 16.15 in CI; not deployed to a production database.
@@ -173,6 +173,9 @@ updatedAt
 Statuses:
 
 PENDING_REVIEW
+
+merchant_documents:
+  id, merchantId, type, storageKey, createdAt
 ACTIVE
 REJECTED
 SUSPENDED
@@ -591,7 +594,7 @@ verification (ADR-019).
 
 | File                                                  | Role                                                            |
 | ----------------------------------------------------- | --------------------------------------------------------------- |
-| `packages/database/prisma/schema.prisma`               | Source of truth: 42 models, 26 enums                            |
+| `packages/database/prisma/schema.prisma`               | Source of truth: 43 models, 26 enums                            |
 | `packages/database/prisma/migrations/0001_init/`        | Generated DDL + hand-written constraints                         |
 | `packages/database/prisma/manual/0001_init_constraints.sql` | Constraints Prisma cannot express (partial/functional indexes, `CHECK`) |
 | `packages/database/scripts/build-migration.mjs`         | Rebuilds the migration from the two files above                  |
